@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from transformers import TrainingArguments
 from typing import List
+import torch
 
 
 @dataclass
@@ -50,6 +51,7 @@ class DataArguments:
 
 @dataclass
 class TrainingArguments(TrainingArguments):
+    device: torch.device = field(default=None, metadata={"help": "device for training/inference"})
     image_encoder_freeze: bool = field(default=False, metadata={"help": "huggingface model name"})
     output_dir: str = field(default=None, metadata={"help": "directory for saving trained models"})
     resume_from: str = field(default="none", metadata={"help": "`auto` will detect if any previous checkpoints should be resumed. or specify specific step of the checkpoint."})

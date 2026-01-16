@@ -2,6 +2,8 @@ import os
 import sys
 
 from datasets import load_dataset
+from src.constant.dataset_hflocal_path import EVAL_DATASET_HF_PATH as EVAL_DATASET_LOCAL_PATH
+from src.utils.dataset_utils import load_hf_dataset
 from src.data.eval_dataset.base_eval_dataset import AutoEvalPairDataset, add_metainfo_hook, RESOLUTION_MAPPING
 from src.model.processor import process_input_text
 
@@ -36,11 +38,23 @@ def data_prepare(batch_dict, *args, **kwargs):
 
 
 DATASET_PARSER_NAME = "image_qa"
-DATASET_HF_PATH = "ziyjiang/MMEB_Test_Instruct"
+# DATASET_HF_PATH = "ziyjiang/MMEB_Test_Instruct"
+DATASET_HF_PATH = "/code/.cache/datasets/MMEB-v2_1/image-query"
 @AutoEvalPairDataset.register(DATASET_PARSER_NAME)
 def load_image_qa_dataset(model_args, data_args, *args, **kwargs):
     dataset_name = kwargs["dataset_name"]
-    dataset = load_dataset(DATASET_HF_PATH, dataset_name, split="test")
+    
+    # Try to load from local path first, fallback to HF if not available
+    if dataset_name in EVAL_DATASET_LOCAL_PATH:
+        local_path, subset, split = EVAL_DATASET_LOCAL_PATH[dataset_name]
+        if os.path.exists(local_path):
+            print(f"Loading {dataset_name} from local path: {local_path}")
+            dataset = load_hf_dataset((local_path, subset, split, "local"))
+        else:
+            print(f"Local path {local_path} not found, falling back to HuggingFace Hub")
+            dataset = load_dataset(DATASET_HF_PATH, dataset_name, split="test")
+    else:
+        dataset = load_dataset(DATASET_HF_PATH, dataset_name, split="test")
     num_sample_per_subset = kwargs.get("num_sample_per_subset", sys.maxsize)
     if num_sample_per_subset is not None and type(num_sample_per_subset) is str and num_sample_per_subset.isdigit():
         num_sample_per_subset = int(num_sample_per_subset)
@@ -51,9 +65,16 @@ def load_image_qa_dataset(model_args, data_args, *args, **kwargs):
     kwargs['model_backbone'] = model_args.model_backbone
     kwargs['image_resolution'] = data_args.image_resolution
 
-    dataset = dataset.map(lambda x: data_prepare(x, **kwargs), batched=True,
-                          batch_size=256, num_proc=4,
-                          drop_last_batch=False, load_from_cache_file=False)
+    # 使用可pickle的顶层函数 data_prepare，允许多进程
+    dataset = dataset.map(
+        data_prepare,
+        batched=True,
+        batch_size=256,
+        num_proc=4,
+        drop_last_batch=False,
+        load_from_cache_file=False,
+        fn_kwargs=kwargs,
+    )
     dataset = dataset.select_columns(["query_text", "query_image", "cand_text", "cand_image", "dataset_infos"])
 
     return dataset, None

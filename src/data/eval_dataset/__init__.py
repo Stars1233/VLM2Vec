@@ -33,3 +33,21 @@ from .image_i2i_vg_dataset import load_image_i2i_vg_dataset
 # VisDoc
 from .vidore_dataset import load_vidore_dataset
 from .visrag_dataset import load_visrag_dataset
+
+# ToolDe 
+from .toolde_dataset import load_toolde_dataset
+
+# Audio Classification
+from .audio_cls_dataset import load_audio_cls_dataset
+
+# Audio Retrieval
+from .sounddescs_retrieval_dataset import load_sounddescs_text_audio_dataset
+from .clotho_dataset import load_clotho_text_audio_dataset
+from .speechcoco_retrieval_dataset import load_speechcoco_dataset
+from .ave_retreival_dateset import load_ave_retrieval_dataset
+
+# Audio Grounding
+from .tutsound_dataset import load_tutsound_audio_dataset
+
+# Text Retrieval
+from .complex_text_retrieve import load_complex_text_retrieve_dataset

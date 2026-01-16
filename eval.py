@@ -24,7 +24,7 @@ from src.data.collator.eval_collator import MultimodalEvalDataCollator
 from src.data.eval_dataset.base_eval_dataset import AutoEvalPairDataset, generate_cand_dataset
 from src.utils.eval_utils import RankingMetrics
 from src.model.model import MMEBModel
-from src.model.processor import get_backbone_name, load_processor, COLPALI
+from src.model.processor import get_backbone_name, load_processor, COLPALI, QWEN2_5_OMNI
 from src.utils.basic_utils import batch_to_device, print_rank, print_master
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s [%(name)s:%(lineno)s] %(message)s')
@@ -74,13 +74,120 @@ def encode_embeddings(
             with torch.autocast(enabled=True, dtype=torch.bfloat16, device_type="cuda"):
                 # Determine if encoding query or target based on available keys
                 if encode_side == "qry":
-                    output = model(qry=inputs)
-                    reps = output["qry_reps"].detach()
-                    local_gt_infos.extend(dataset_info)  # to retain all information per query
+                    out_key = "qry_reps"
+                    gt_infos = dataset_info
                 else:
-                    output = model(tgt=inputs)
-                    reps = output["tgt_reps"].detach()
-                    local_gt_infos.extend([info["cand_name"] for info in dataset_info])  # to retain ground-truth labels
+                    out_key = "tgt_reps"
+                    gt_infos = [info["cand_name"] for info in dataset_info]
+
+                if model_args.model_backbone == QWEN2_5_OMNI:
+                    # Bucketed micro-batching by grid_thw to keep visual seq_len aligned.
+                    batch_size = inputs["input_ids"].shape[0]
+                    device = inputs["input_ids"].device
+
+                    pixel_values = inputs.get("pixel_values", None)
+                    image_grid_thw = inputs.get("image_grid_thw", None)
+                    pixel_values_videos = inputs.get("pixel_values_videos", None)
+                    video_grid_thw = inputs.get("video_grid_thw", None)
+
+                    def _get_item(value, idx):
+                        if value is None:
+                            return None
+                        if isinstance(value, list):
+                            return value[idx]
+                        if isinstance(value, torch.Tensor):
+                            return value[idx]
+                        # 有些 processor 可能给 dict（不常见），这里尽量不支持，直接 None
+                        return None
+
+                    def _grid_to_key(grid_item):
+                        if grid_item is None:
+                            return None
+                        if isinstance(grid_item, torch.Tensor):
+                            # shape [3] / [T,3] 等都转成 python tuple 可 hash
+                            return tuple(grid_item.detach().cpu().reshape(-1).tolist())
+                        if isinstance(grid_item, (list, tuple)):
+                            # list of int
+                            try:
+                                flat = []
+                                for x in grid_item:
+                                    if isinstance(x, torch.Tensor):
+                                        flat.extend(x.detach().cpu().reshape(-1).tolist())
+                                    elif isinstance(x, (list, tuple)):
+                                        flat.extend(list(x))
+                                    else:
+                                        flat.append(x)
+                                return tuple(flat)
+                            except Exception:
+                                return str(grid_item)
+                        return str(grid_item)
+
+                    def _bucket_key(i):
+                        img_pv = _get_item(pixel_values, i)
+                        img_gt = _get_item(image_grid_thw, i)
+                        vid_pv = _get_item(pixel_values_videos, i)
+                        vid_gt = _get_item(video_grid_thw, i)
+
+                        has_img = (img_pv is not None) or (img_gt is not None)
+                        has_vid = (vid_pv is not None) or (vid_gt is not None)
+
+                        if has_vid:
+                            return ("vid", _grid_to_key(vid_gt))
+                        if has_img:
+                            return ("img", _grid_to_key(img_gt))
+                        return ("none",)
+
+                    # 1) 分桶（只在当前 batch 内）
+                    buckets = {}
+                    for i in range(batch_size):
+                        k = _bucket_key(i)
+                        buckets.setdefault(k, []).append(i)
+
+                    # 2) 逐桶 forward，并把 reps 写回原顺序
+                    reps_out = torch.empty((batch_size, model.rep_dim), device=device, dtype=torch.float32)
+
+                    def _slice_value(v, idxs):
+                        if v is None:
+                            return None
+                        if isinstance(v, torch.Tensor):
+                            return v[idxs]
+                        if isinstance(v, list):
+                            return [v[j] for j in idxs]
+                        return None
+
+                    def _slice_inputs(inputs_dict, idxs):
+                        sub = {}
+                        for kk, vv in inputs_dict.items():
+                            # dataset_infos 不在 inputs 里，这里只处理 tensor/list/None
+                            sub[kk] = _slice_value(vv, idxs)
+                        return sub
+
+                    for _, idxs in buckets.items():
+                        if len(idxs) == 0:
+                            continue
+                        sub_inputs = _slice_inputs(inputs, idxs)
+
+                        # ⚠️ 不要做长度维度裁剪，只做样本维度切片
+                        if encode_side == "qry":
+                            output = model(qry=sub_inputs)
+                        else:
+                            output = model(tgt=sub_inputs)
+
+                        sub_reps = output[out_key].detach()
+                        # sub_reps shape: [len(idxs), D]
+                        reps_out[idxs] = sub_reps.to(reps_out.dtype)
+
+                    reps = reps_out
+                    local_gt_infos.extend(gt_infos)
+
+                else:
+                    # 原来的非 omni 路径：直接跑
+                    if encode_side == "qry":
+                        output = model(qry=inputs)
+                    else:
+                        output = model(tgt=inputs)
+                    reps = output[out_key].detach()
+                    local_gt_infos.extend(gt_infos)
 
             if is_late_interaction and reps.dim() == 3:
                 local_max_len = max(local_max_len, reps.shape[1])
@@ -168,6 +275,18 @@ def main():
     training_args: TrainingArguments
     os.makedirs(data_args.encode_output_path, exist_ok=True)
 
+    # 设置设备
+    if torch.cuda.is_available():
+        training_args.device = torch.device("cuda")
+    else:
+        training_args.device = torch.device("cpu")
+
+    # 确保在分布式训练中正确设置设备
+    if dist.is_initialized():
+        torch.cuda.set_device(local_rank)
+        training_args.device = torch.device(f"cuda:{local_rank}")
+
+
     # --- Model Loading ---
     hf_config = AutoConfig.from_pretrained(model_args.model_name, trust_remote_code=True)
     if not getattr(model_args, "model_backbone", None):
@@ -175,6 +294,7 @@ def main():
         setattr(model_args, 'model_backbone', model_backbone)
         setattr(training_args, 'model_backbone', model_backbone)
     print_master(f'Model Backbone: {model_args.model_backbone}')
+    print_master(f'Using device: {training_args.device}')
     # --- DDP-Safe Model Loading ---
     # Step 1: Only the master process (rank 0) downloads the model.
     if local_rank == 0:
@@ -247,6 +367,9 @@ def main():
             query_embeds = query_embeds[:len(full_eval_qry_dataset)]  # world_size>1, trim the padded data points
             gt_infos = gt_infos[:len(full_eval_qry_dataset)]
             if local_rank == 0:
+                # 确保目录存在（dataset_name可能包含子目录）
+                os.makedirs(os.path.dirname(query_embed_path), exist_ok=True)
+                os.makedirs(os.path.dirname(dataset_info_path), exist_ok=True)
                 with open(query_embed_path, 'wb') as f:
                     pickle.dump(query_embeds, f)
                 with open(dataset_info_path, 'w') as f:
@@ -269,6 +392,8 @@ def main():
 
             if local_rank == 0:
                 cand_embed_dict = {cand_id: embed for cand_id, embed in zip(all_cand_ids, cand_embeds)}
+                # 确保目录存在（dataset_name可能包含子目录）
+                os.makedirs(os.path.dirname(cand_embed_path), exist_ok=True)
                 with open(cand_embed_path, 'wb') as f: pickle.dump(cand_embed_dict, f)
                 print_master(f"Saved candidate embeddings to {cand_embed_path}")
 
@@ -330,6 +455,13 @@ def main():
                     rel_scores = gt_info["rel_scores"] if "rel_scores" in gt_info else None
 
                     assert rel_scores is None or len(rel_docids) == len(rel_scores)
+
+                    # Debug: inspect first sample top10
+                    if qid == 0 and dataset_name == "QVHighlight":
+                        top10_idx = ranked_candids[:10].tolist() if isinstance(ranked_candids, np.ndarray) else ranked_candids[:10]
+                        top10_names = [gt_info["cand_names"][i] for i in top10_idx]
+                        print_master(f"[DEBUG QVHighlight] label: {rel_docids}, top10_idx: {top10_idx}, top10_names: {top10_names}")
+
                     pred_dicts.append({
                         "prediction": [gt_info["cand_names"][i] for i in ranked_candids],
                         "label": rel_docids,

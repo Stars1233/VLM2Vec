@@ -122,30 +122,55 @@ def generate_cand_dataset(dataset, corpus):
     """
     Used for generating candidate datasets.
     Flatten candidates, merge with corpus, deduplication
+    支持 cand_image 和 cand_video（用于视频数据集）
     """
     cand_rows = []
     all_cand_name = set()
     for row in dataset:
-        assert len(row["cand_text"]) == len(row["cand_image"]) == len(row["dataset_infos"]["cand_names"])
-        for cand_text, cand_image, cand_name in zip(row["cand_text"], row["cand_image"], row["dataset_infos"]["cand_names"]):
+        # 检测候选项使用的视觉字段（cand_image 或 cand_video）
+        cand_visual_key = None
+        if "cand_video" in row:
+            cand_visual_key = "cand_video"
+        elif "cand_image" in row:
+            cand_visual_key = "cand_image"
+        
+        # ✅ 新架构/全局模式：query_dataset 可能不含候选字段，直接跳过
+        if (
+            ("cand_text" not in row)
+            or (cand_visual_key is None)
+            or ("dataset_infos" not in row)
+            or (not isinstance(row["dataset_infos"], dict))
+            or ("cand_names" not in row["dataset_infos"])
+        ):
+            continue
+
+        # ✅ 旧架构/local 模式：保持原逻辑不变
+        assert len(row["cand_text"]) == len(row[cand_visual_key]) == len(row["dataset_infos"]["cand_names"])
+        for cand_text, cand_visual, cand_name in zip(row["cand_text"], row[cand_visual_key], row["dataset_infos"]["cand_names"]):
             if cand_name not in all_cand_name:
-                cand_rows.append({
+                # 根据原始字段决定使用哪个键
+                cand_row = {
                     "cand_text": [cand_text],
-                    "cand_image": [cand_image],
                     "dataset_infos": {"cand_name": cand_name},
-                })
+                }
+                cand_row[cand_visual_key] = [cand_visual]
+                cand_rows.append(cand_row)
                 all_cand_name.add(cand_name)
 
     if corpus is not None:
         for row in corpus:
-            assert len(row["cand_text"]) == len(row["cand_image"]) == len(row["dataset_infos"]["cand_names"]) == 1
+            # 检测corpus使用的视觉字段
+            corpus_visual_key = "cand_video" if "cand_video" in row else "cand_image"
+            
+            assert len(row["cand_text"]) == len(row[corpus_visual_key]) == len(row["dataset_infos"]["cand_names"]) == 1
             cand_name = row["dataset_infos"]["cand_names"][0]
             if cand_name not in all_cand_name:
-                cand_rows.append({
+                corpus_row = {
                     "cand_text": row["cand_text"],
-                    "cand_image": row["cand_image"],
                     "dataset_infos": {"cand_name": row["dataset_infos"]["cand_names"][0]},
-                })
+                }
+                corpus_row[corpus_visual_key] = row[corpus_visual_key]
+                cand_rows.append(corpus_row)
                 all_cand_name.add(cand_name)
 
     cand_dataset = Dataset.from_list(cand_rows)
