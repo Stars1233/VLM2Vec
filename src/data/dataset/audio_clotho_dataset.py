@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Tuple
 
 import datasets
 import pandas as pd
+
+from src.data.dataset.base_pair_dataset import AutoPairDataset
 from src.utils.basic_utils import print_master
 from src.data.eval_dataset.audio_instruction_utils import build_query_text
 
@@ -33,26 +35,27 @@ def _expand_clotho_rows(csv_path: str, audio_dir: str) -> List[Dict[str, str]]:
     return records
 
 
+@AutoPairDataset.register("load_audio_clotho_dataset")
 def load_audio_clotho_dataset(*args: Any, **kwargs: Any):
     """
-    加载 Clotho 文本->音频检索数据集（训练/finetune 场景）。
+    加载 Clotho 文本->音频检索数据集（训练/finetune 场景，适配 train_collator_omni）。
 
     参数（kwargs）：
         data_path: 数据根目录，默认 /code/.cache/datasets/MMEB-v2_1/audio-tasks/clotho
-        captions_csv: caption 文件名，默认 clotho_captions_evaluation.csv
-        audio_subdir: 音频子目录，默认 evaluation
+        captions_csv: caption 文件名，默认 clotho_captions_development.csv
+        audio_subdir: 音频子目录，默认 train/development
 
     返回：
         datasets.Dataset，字段：
-            - text: caption
-            - audio_path: 对应 wav 绝对路径
-            - file_name: 原文件名（便于评测映射）
+            - query_text/query_image/query_audio
+            - pos_text/pos_image/pos_audio
+            - dataset_infos
     """
     data_path: str = kwargs.get(
         "data_path", "/code/.cache/datasets/MMEB-v2_1/audio-tasks/clotho"
     )
-    captions_csv: str = kwargs.get("captions_csv", "clotho_captions_evaluation.csv")
-    audio_subdir: str = kwargs.get("audio_subdir", "evaluation")
+    captions_csv: str = kwargs.get("captions_csv", "clotho_captions_development.csv")
+    audio_subdir: str = kwargs.get("audio_subdir", os.path.join("train", "development"))
 
     csv_path = os.path.join(data_path, captions_csv)
     audio_dir = os.path.join(data_path, audio_subdir)
@@ -63,15 +66,42 @@ def load_audio_clotho_dataset(*args: Any, **kwargs: Any):
     records = _expand_clotho_rows(csv_path, audio_dir)
     print_master(f"[Clotho] 共生成样本数: {len(records)}")
 
-    features = datasets.Features(
+    query_texts, query_images, query_audios = [], [], []
+    pos_texts, pos_images, pos_audios = [], [], []
+    dataset_infos = []
+
+    for r in records:
+        audio_path = r["audio_path"]
+        if not os.path.isfile(audio_path):
+            continue
+        query_text = build_query_text("Clotho", r["text"])
+        assert isinstance(query_text, list) and len(query_text) == 1 and isinstance(query_text[0], str) and query_text[0].strip()
+
+        query_texts.append(query_text)
+        query_images.append(None)
+        query_audios.append(None)
+
+        pos_texts.append("[AUDIO]")
+        pos_images.append(None)
+        pos_audios.append({"path": audio_path, "bytes": None, "start": None, "end": None})
+
+        dataset_infos.append({"file_name": r["file_name"]})
+
+    dataset = datasets.Dataset.from_dict(
         {
-            "text": datasets.Value("string"),
-            "audio_path": datasets.Value("string"),
-            "file_name": datasets.Value("string"),
+            "query_text": query_texts,
+            "query_image": query_images,
+            "query_audio": query_audios,
+            "pos_text": pos_texts,
+            "pos_image": pos_images,
+            "pos_audio": pos_audios,
+            "dataset_infos": dataset_infos,
         }
     )
-    dataset = datasets.Dataset.from_list(records, features=features)
-    setattr(dataset, "num_rows", len(dataset))
+    try:
+        setattr(dataset, "num_rows", len(dataset))
+    except (AttributeError, TypeError):
+        pass
     return dataset
 
 
@@ -110,7 +140,7 @@ def build_clotho_text_audio_dataset(path_info: Tuple[str, str, str], **kwargs):
     # 构建query_dataset - 只包含查询信息和标签
     query_dataset = datasets.Dataset.from_dict({
         "query_text": query_texts,
-        "query_image": [[None] for _ in texts],
+        "query_image": [None for _ in texts],
         "query_audio": [None for _ in texts],
         "dataset_infos": [{"label_cand_id": lid, "file_name": fn, "label_name": fn} for lid, fn in zip(label_ids, file_names)],
     })
@@ -129,4 +159,3 @@ def build_clotho_text_audio_dataset(path_info: Tuple[str, str, str], **kwargs):
     corpus_dataset = datasets.Dataset.from_list(corpus_rows)
 
     return query_dataset, corpus_dataset
-

@@ -40,6 +40,7 @@ QWEN2_5_VL = 'qwen2_5_vl'
 QWEN2_VL_TOKENSELECTION = 'qwen2_vl_tokenselection'
 QWEN2_5_VL_TOKENSELECTION = 'qwen2_5_vl_tokenselection'
 QWEN2_5_OMNI = 'qwen2_5_omni'  # Qwen2.5-Omni / Omni-Embed
+NVOMNIEMBED = 'nvomniembed'  # NVIDIA omni-embed-nemotron
 INTERNVIDEO2 = 'internvideo2'
 GME = 'gme'  # QWEN2-VL
 LamRA = 'lamra'  # QWEN2-VL
@@ -55,7 +56,8 @@ MODEL2BACKBONE = {  # keys are from hf_config.model_type or manually added if no
     'qwen2_vl_tokenselection': QWEN2_VL_TOKENSELECTION,
     'qwen2_5_vl_tokenselection': QWEN2_5_VL_TOKENSELECTION,
     'qwen2_5_omni': QWEN2_5_OMNI,
-    'nvomniembed': QWEN2_5_OMNI,
+    'qwen2_5_omni_thinker': QWEN2_5_OMNI,
+    'nvomniembed': NVOMNIEMBED,
     'internvideo2': INTERNVIDEO2,
     'gme': GME, 
     'lamra': LamRA,
@@ -73,6 +75,7 @@ VLM_IMAGE_TOKENS = {
     QWEN2_VL_TOKENSELECTION: "<|image_pad|>",
     QWEN2_5_VL_TOKENSELECTION: "<|image_pad|>",
     QWEN2_5_OMNI: "<|image_pad|>",
+    NVOMNIEMBED: "<|image_pad|>",
     GME: "<|image_pad|>",
     LamRA: "<|image_pad|>",
     LamRA_QWEN2_5: "<|image_pad|>",
@@ -88,6 +91,7 @@ VLM_VIDEO_TOKENS = {
     QWEN2_VL_TOKENSELECTION: "<|video_pad|>",
     QWEN2_5_VL_TOKENSELECTION: "<|video_pad|>",
     QWEN2_5_OMNI: "<|video_pad|>",
+    NVOMNIEMBED: "<|video_pad|>",
     GME: "<|video_pad|>",
     LamRA: "<|video_pad|>",
     LamRA_QWEN2_5: "<|video_pad|>",
@@ -191,43 +195,24 @@ def load_processor(model_args, data_args=None):
             uimask_ratio=model_args.uimask_ratio, uimask_rand=model_args.uimask_rand
         )
     elif model_args.model_backbone == QWEN2_5_OMNI:
-        # Qwen2.5-Omni / Omni-Embed：支持文本、图像、视频、音频的多模态处理器
-        from src.model.vlm_backbone.qwen2_5_vl.processing_qwen2_5_vl import Qwen2_5_VLProcessor
-        from src.model.vlm_backbone.qwen2_5_vl.image_processing_qwen2_5_vl import Qwen2_5_VLImageProcessor
-        from src.model.vlm_backbone.qwen2_vl.tokenization_qwen2_fast import Qwen2TokenizerFast
-        from src.model.vlm_backbone.omni_embed.audio_processing_qwen2_5_omni import Qwen2_5_OmniAudioProcessor
+        # Qwen2.5-Omni / Omni-Embed: use official processor with apply_chat_template.
+        from src.model.olm_backbone.qwen2_5_moni.processing_qwen2_5_omni import Qwen2_5OmniEmbeddingProcessor
 
-        # 1. 图像/视频 resize 配置
-        min_pixels, max_pixels = None, None
-        if data_args is not None:
-            min_pixels, max_pixels = data_args.resize_min_pixels, data_args.resize_max_pixels
-        size = {"shortest_edge": min_pixels, "longest_edge": max_pixels, "min_pixels": min_pixels, "max_pixels": max_pixels}
-        
-        # 2. 初始化图像处理器（同时支持图像和视频）
-        image_processor = Qwen2_5_VLImageProcessor.from_pretrained(model_name_or_path, size=size)
-        
-        # 3. 初始化文本 tokenizer
-        tokenizer = Qwen2TokenizerFast.from_pretrained(model_name_or_path)
-        
-        # 4. 创建基础 processor（支持文本、图像、视频）
-        processor = Qwen2_5_VLProcessor.from_pretrained(
-            model_name_or_path, 
-            image_processor=image_processor, 
-            tokenizer=tokenizer
-        )
-        
-        # 5. 添加音频处理器（生成 128-dim 梅尔频谱图，与 Qwen2.5-Omni 模型兼容）
-        processor.audio_processor = Qwen2_5_OmniAudioProcessor(
-            sample_rate=16000,  # 音频采样率
-            mono=True,          # 转换为单声道
-            normalize=True,     # 归一化音频信号
-            dtype=torch.float32,
-            n_mels=128,         # 梅尔频谱图通道数（与模型期望一致）
-            n_fft=400,          # FFT 窗口大小（25ms @ 16kHz）
-            hop_length=160,     # 跳跃长度（10ms @ 16kHz）
-            f_min=0.0,
-            f_max=8000.0,
-        )
+        processor_path = model_args.processor_name if model_args.processor_name else model_args.model_name
+        processor = Qwen2_5OmniEmbeddingProcessor.from_pretrained(processor_path, trust_remote_code=True)
+        root_logger = logging.getLogger()
+        if not getattr(root_logger, "_suppress_qwen_omni_prompt_warning", False):
+            class _SuppressQwenOmniPromptWarning(logging.Filter):
+                def filter(self, record: logging.LogRecord) -> bool:
+                    msg = record.getMessage()
+                    return "System prompt modified, audio output may not work as expected." not in msg
+
+            root_logger.addFilter(_SuppressQwenOmniPromptWarning())
+            root_logger._suppress_qwen_omni_prompt_warning = True
+    elif model_args.model_backbone == NVOMNIEMBED:
+        from transformers import AutoProcessor
+
+        processor = AutoProcessor.from_pretrained(model_name_or_path, trust_remote_code=True)
         
     elif model_args.model_backbone == INTERNVIDEO2:
         return None
@@ -719,190 +704,343 @@ def Omni_process_fn(model_inputs: dict, processor, max_length=None):
     import inspect
     import torch
     import PIL
+    import numpy as np
 
     texts = model_inputs.get("text", [])
-    visual_inputs = model_inputs.get("images", None)  # could be None or list
-    if visual_inputs is None and "videos" in model_inputs:
-        # AVE/cand_video uses videos; Omni path relies on text token to pick video handling.
-        visual_inputs = model_inputs.get("videos", None)
+    images = model_inputs.get("images", None)
+    videos = model_inputs.get("videos", None)
     audios = model_inputs.get("audios", None)         # could be None or list
     audio_sample_rate = model_inputs.get("audio_sample_rate", None)
 
     if texts is None:
         texts = []
-    if visual_inputs is None:
-        visual_inputs = [None] * len(texts)
+    if images is None:
+        images = [None] * len(texts)
+    if videos is None:
+        videos = [None] * len(texts)
     if audios is None:
         audios = [None] * len(texts)
 
-    assert len(texts) == len(visual_inputs), f"len(texts)={len(texts)} != len(images)={len(visual_inputs)}"
+    assert len(texts) == len(images), f"len(texts)={len(texts)} != len(images)={len(images)}"
+    assert len(texts) == len(videos), f"len(texts)={len(texts)} != len(videos)={len(videos)}"
     assert len(texts) == len(audios), f"len(texts)={len(texts)} != len(audios)={len(audios)}"
 
     if not any(t and str(t).strip() for t in texts):
         raise ValueError("Omni_process_fn: at least one non-empty text is required.")
 
-    vlm_image_token = VLM_IMAGE_TOKENS[QWEN2_5_OMNI]
-    vlm_video_token = VLM_VIDEO_TOKENS[QWEN2_5_OMNI]
+    # Mirror NVOmni behavior: audio must be all-or-none within a batch.
+    if any(a is not None for a in audios) and any(a is None for a in audios):
+        raise ValueError("Omni_process_fn: audio batch contains None; omni processor expects valid audio for all samples.")
 
-    # -----------------------------------------
-    # 1) Audio: batch process (optional)
-    # -----------------------------------------
-    input_features = None
-    audio_attention_mask = None
-    audio_feature_lengths = None
+    base_processor = getattr(processor, "base", processor)
 
-    if hasattr(processor, "audio_processor") and any(a is not None for a in audios):
-        # collect valid waveforms
-        audio_batch = []
-        audio_pos = []  # mapping from packed idx -> original idx
-
-        for i, a in enumerate(audios):
-            if a is None:
-                continue
-            if not isinstance(a, torch.Tensor) or a.ndim != 1:
-                raise ValueError(f"Audio must be 1D torch.Tensor waveform, got {type(a)} shape={getattr(a,'shape',None)}")
-            audio_batch.append(a.detach().cpu().numpy())
-            audio_pos.append(i)
-
-        sig = inspect.signature(processor.audio_processor.__call__)
-        kwargs = {"return_tensors": "pt"}
-        if "sampling_rate" in sig.parameters and audio_sample_rate is not None:
-            kwargs["sampling_rate"] = audio_sample_rate
-
-        audio_out = processor.audio_processor(audio_batch, **kwargs)
-
-        feats = audio_out["input_features"]  # (B_valid, 128, T)
-        fam = audio_out.get("feature_attention_mask", None)
-        afl = audio_out.get("audio_feature_lengths", None)
-
-        # re-expand to full batch length (keep None for missing)
-        input_features = [None] * len(audios)
-        audio_attention_mask = [None] * len(audios)
-        audio_feature_lengths = [None] * len(audios)
-
-        for j, orig_i in enumerate(audio_pos):
-            input_features[orig_i] = feats[j]
-            audio_attention_mask[orig_i] = (fam[j] if fam is not None else None)
-            audio_feature_lengths[orig_i] = (afl[j] if afl is not None else None)
-
-    # -----------------------------------------
-    # 2) Text + Vision: per-sample tokenize
-    # -----------------------------------------
-    input_ids_list = []
-    pixel_values_list = []
-    image_grid_thw_list = []
-    pixel_values_videos_list = []
-    video_grid_thw_list = []
-
-    for text, vis in zip(texts, visual_inputs):
-        text = str(text)
-
-        # -------- text only --------
-        if vis is None or (isinstance(vis, list) and any(v is None for v in vis)):
-            out = processor(
-                text=[text],
-                return_tensors="pt",
-                max_length=_text_only_max_length(max_length),
-                truncation=True,
-            )
-            input_ids_list.append(out["input_ids"][0].tolist())
-            pixel_values_list.append(None)
-            image_grid_thw_list.append(None)
-            pixel_values_videos_list.append(None)
-            video_grid_thw_list.append(None)
-            continue
-        
-        
-        def _squeeze_leading_ones(x, max_squeeze=2):
-            if x is None:
-                return None
-            if not isinstance(x, torch.Tensor):
-                return x
-            for _ in range(max_squeeze):
-                if x.dim() >= 1 and x.size(0) == 1:
-                    x = x.squeeze(0)
-                else:
-                    break
+    def _squeeze_leading_ones(x, max_squeeze=2):
+        if x is None:
+            return None
+        if not isinstance(x, torch.Tensor):
             return x
+        for _ in range(max_squeeze):
+            if x.dim() >= 1 and x.size(0) == 1:
+                x = x.squeeze(0)
+            else:
+                break
+        return x
 
-        # -------- image token path --------
-        if vlm_image_token in text:
-            # allow vis as single PIL or list[PIL]
-            if isinstance(vis, PIL.Image.Image):
-                vis = [vis]
+    def _to_pil_image(x):
+        if x is None or isinstance(x, (str, PIL.Image.Image)):
+            return x
+        arr = None
+        if isinstance(x, torch.Tensor):
+            t = x.detach().cpu()
+            if t.dim() == 3 and t.shape[0] in (1, 3) and t.shape[-1] not in (1, 3):
+                t = t.permute(1, 2, 0)
+            arr = t.numpy()
+        elif isinstance(x, np.ndarray):
+            arr = x
+            if arr.ndim == 3 and arr.shape[0] in (1, 3) and arr.shape[-1] not in (1, 3):
+                arr = np.transpose(arr, (1, 2, 0))
+        if arr is None:
+            return x
+        if arr.dtype.kind == "f":
+            arr = (arr * 255.0).clip(0, 255).astype("uint8")
+        elif arr.dtype != np.uint8:
+            arr = arr.clip(0, 255).astype("uint8")
+        if arr.ndim == 3 and arr.shape[-1] == 1:
+            arr = arr.squeeze(-1)
+        return PIL.Image.fromarray(arr)
 
-            out = processor(
-                text=[text],
-                images=vis,
-                return_tensors="pt",
-                truncation=False,
-            )
+    def _to_video_input(v):
+        if v is None or isinstance(v, str):
+            return v
+        if isinstance(v, list):
+            frames = [f for f in v if f is not None]
+            return [_to_pil_image(f) for f in frames] if frames else None
+        if isinstance(v, (torch.Tensor, np.ndarray)):
+            t = v.detach().cpu().numpy() if isinstance(v, torch.Tensor) else v
+            if t.ndim != 4:
+                raise ValueError(f"Video tensor must be 4D, got shape {tuple(t.shape)}")
+            if t.shape[-1] in (1, 3):
+                frames = [t[i] for i in range(t.shape[0])]
+            else:
+                frames = [np.transpose(t[i], (1, 2, 0)) for i in range(t.shape[0])]
+            return [_to_pil_image(f) for f in frames]
+        return v
 
-            input_ids_list.append(out["input_ids"][0].tolist())
-
-            pv = _squeeze_leading_ones(out.get("pixel_values", None), max_squeeze=2)
-            gt = _squeeze_leading_ones(out.get("image_grid_thw", None), max_squeeze=2)
-            pixel_values_list.append(pv)        # ✅ 用 squeeze 后的
-            image_grid_thw_list.append(gt)      # ✅ 用 squeeze 后的
-
-            pixel_values_videos_list.append(None)
-            video_grid_thw_list.append(None)
-            continue
-
-        # -------- video token path --------
-        if vlm_video_token in text:
-            # vis MUST be list[PIL.Image] (frames)
-            if not isinstance(vis, list) or (len(vis) > 0 and not isinstance(vis[0], PIL.Image.Image)):
-                raise ValueError(f"Video input must be List[PIL.Image] frames, got {type(vis)} elem={type(vis[0]) if isinstance(vis,list) and len(vis)>0 else None}")
-            out = processor(
-                text=[text],
-                videos=[vis],
-                return_tensors="pt",
-                truncation=False,
-            )
-            input_ids_list.append(out["input_ids"][0].tolist())
-            pixel_values_list.append(None)
-            image_grid_thw_list.append(None)
-            pixel_values_videos_list.append(out.get("pixel_values_videos", None))
-            video_grid_thw_list.append(out.get("video_grid_thw", None))
-            continue
-
-        # If you provide visual input but text has no token -> explicit error helps debugging
-        raise ValueError(f"Visual input is provided but text contains no visual token ({vlm_image_token} / {vlm_video_token}). text={text[:200]}")
+    def _to_audio_input(a):
+        if a is None:
+            return None
+        if isinstance(a, torch.Tensor):
+            if a.ndim != 1:
+                raise ValueError(f"Audio must be 1D torch.Tensor waveform, got {type(a)} shape={getattr(a,'shape',None)}")
+            return a.detach().cpu().numpy()
+        if isinstance(a, np.ndarray):
+            return a
+        return np.asarray(a)
 
     # -----------------------------------------
-    # 3) Pad text (ALWAYS tensorize here)
+    # 1) Build normalized batches (AutoProcessor path)
     # -----------------------------------------
-    enc = processor.tokenizer.pad(
-        {"input_ids": input_ids_list},
-        padding=True,
-        return_tensors="pt",
-        return_attention_mask=True,
-    )
-    input_ids = enc["input_ids"].long()
-    attention_mask = enc["attention_mask"].long()
+    images_batch = []
+    videos_batch = []
+    audios_batch = []
+    has_video = False
+    has_image = False
+    for text, image, video, audio in zip(texts, images, videos, audios):
+        text = str(text)
+        if not text.strip():
+            raise ValueError("Omni_process_fn: empty text is not allowed.")
 
-    # -----------------------------------------
-    # 4) Clean empty vision lists (keep None if whole batch has no that modality)
-    # -----------------------------------------
-    if not any(v is not None for v in pixel_values_list):
-        pixel_values_list = None
-        image_grid_thw_list = None
-    if not any(v is not None for v in pixel_values_videos_list):
-        pixel_values_videos_list = None
-        video_grid_thw_list = None
+        # If video is not provided but image is a multi-frame list, treat it as video.
+        if video is None and isinstance(image, list):
+            non_null = [v for v in image if v is not None]
+            if len(non_null) > 1:
+                video = image
+                image = None
 
-    return {
-        "input_ids": input_ids,
-        "attention_mask": attention_mask,
-        "pixel_values": pixel_values_list,
-        "image_grid_thw": image_grid_thw_list,
-        "pixel_values_videos": pixel_values_videos_list,
-        "video_grid_thw": video_grid_thw_list,
-        "input_features": input_features,                 # list[Tensor|None] or None
-        "audio_attention_mask": audio_attention_mask,     # list[Tensor|None] or None
-        "audio_feature_lengths": audio_feature_lengths,   # list[Tensor|None] or None
+        image_in = _to_pil_image(image)
+        video_in = _to_video_input(video)
+        audio_in = _to_audio_input(audio)
+        if isinstance(image_in, list):
+            image_in = [im for im in image_in if im is not None]
+            if not image_in:
+                image_in = None
+        if isinstance(image_in, PIL.Image.Image):
+            w, h = image_in.size
+            if w < 28 or h < 28:
+                image_in = None
+        if isinstance(image_in, list):
+            filtered = []
+            for im in image_in:
+                if isinstance(im, PIL.Image.Image):
+                    w, h = im.size
+                    if w < 28 or h < 28:
+                        continue
+                filtered.append(im)
+            image_in = filtered if filtered else None
+        if isinstance(video_in, list):
+            filtered = []
+            for im in video_in:
+                if isinstance(im, PIL.Image.Image):
+                    w, h = im.size
+                    if w < 28 or h < 28:
+                        continue
+                filtered.append(im)
+            video_in = filtered if filtered else None
+
+        has_image = has_image or (image_in is not None)
+        has_video = has_video or (video_in is not None)
+        images_batch.append(image_in)
+        videos_batch.append(video_in)
+        audios_batch.append(audio_in)
+
+    if images_batch and all(i is None for i in images_batch):
+        images_batch = None
+    if videos_batch and all(v is None for v in videos_batch):
+        videos_batch = None
+    if audios_batch and all(a is None for a in audios_batch):
+        audios_batch = None
+
+    call_kwargs = {
+        "return_tensors": "pt",
+        "padding": True,
+        "truncation": True,
     }
+    if max_length is not None:
+        call_kwargs["max_length"] = max_length
+    if audio_sample_rate is not None:
+        call_kwargs["audio_kwargs"] = {"sampling_rate": int(audio_sample_rate)}
+    if has_video:
+        call_kwargs["videos_kwargs"] = {"fps": 2.0, "min_pixels": 32 * 14 * 14, "max_pixels": 64 * 28 * 28}
+    if has_image:
+        call_kwargs["images_kwargs"] = {"min_pixels": 32 * 14 * 14, "max_pixels": 64 * 28 * 28}
+
+    outputs = base_processor(
+        text=texts,
+        images=images_batch,
+        videos=videos_batch,
+        audio=audios_batch,
+        **call_kwargs,
+    )
+
+    if "audio_attention_mask" in outputs and "feature_attention_mask" not in outputs:
+        outputs["feature_attention_mask"] = outputs.pop("audio_attention_mask")
+
+    feats = outputs.get("input_features", None)
+    fam = outputs.get("feature_attention_mask", None)
+    if isinstance(feats, torch.Tensor) and feats.dim() == 3:
+        if feats.shape[1] != 128 and feats.shape[2] == 128:
+            feats = feats.transpose(1, 2)
+        if fam is None:
+            fam = torch.ones(feats.shape[0], feats.shape[2], dtype=torch.long)
+        if isinstance(fam, torch.Tensor) and fam.dim() == 2:
+            if fam.shape[1] != feats.shape[2]:
+                min_len = min(fam.shape[1], feats.shape[2])
+                feats = feats[:, :, :min_len]
+                fam = fam[:, :min_len]
+            outputs["input_features"] = feats
+            outputs["feature_attention_mask"] = fam
+            # Force audio lengths to match feature mask to avoid RoPE index overflow.
+            outputs["audio_feature_lengths"] = fam.sum(-1).long()
+
+    # Ensure input_ids/attention_mask alignment.
+    ids = outputs.get("input_ids", None)
+    am = outputs.get("attention_mask", None)
+    if isinstance(ids, torch.Tensor) and isinstance(am, torch.Tensor):
+        if ids.dim() == 2 and am.dim() == 2 and ids.shape[1] != am.shape[1]:
+            min_len = min(ids.shape[1], am.shape[1])
+            outputs["input_ids"] = ids[:, :min_len]
+            outputs["attention_mask"] = am[:, :min_len]
+
+    # squeeze any leading singleton dims produced by processor
+    for key in ("pixel_values", "image_grid_thw", "pixel_values_videos", "video_grid_thw"):
+        if key in outputs:
+            outputs[key] = _squeeze_leading_ones(outputs.get(key), max_squeeze=2)
+
+    return outputs
+
+
+def NVOmni_process_fn(model_inputs: dict, processor, max_length=None):
+    """
+    NVIDIA omni-embed-nemotron processor for EVAL (collate-time).
+    Delegate to AutoProcessor to build the model inputs directly.
+    """
+    texts = model_inputs.get("text", [])
+    images = model_inputs.get("images", None)
+    videos = model_inputs.get("videos", None)
+    audios = model_inputs.get("audios", None)
+    audio_sample_rate = model_inputs.get("audio_sample_rate", None)
+
+    if texts is None:
+        texts = []
+    if audios is None:
+        audios = [None] * len(texts)
+
+    if audios is not None:
+        if all(a is None for a in audios):
+            audios = None
+        elif any(a is None for a in audios):
+            raise ValueError("NVOmni_process_fn: audio batch contains None; nemo processor expects valid audio for all samples.")
+        else:
+            audio_list = []
+            for a in audios:
+                if isinstance(a, torch.Tensor):
+                    audio_list.append(a.detach().cpu().numpy())
+                else:
+                    audio_list.append(np.asarray(a, dtype=np.float32))
+            audios = audio_list
+
+    call_kwargs = {
+        "return_tensors": "pt",
+        "padding": True,
+        "truncation": True,
+    }
+    if max_length is not None:
+        call_kwargs["max_length"] = max_length
+    if audio_sample_rate is not None:
+        call_kwargs["audio_kwargs"] = {"sampling_rate": int(audio_sample_rate)}
+    # Reduce video token count to avoid OOM.
+    call_kwargs["videos_kwargs"] = {
+        "fps": 2.0,
+        "min_pixels": 32 * 14 * 14,
+        "max_pixels": 64 * 28 * 28,
+    }
+    # Reduce image token count to avoid OOM.
+    call_kwargs["images_kwargs"] = {
+        "min_pixels": 32 * 14 * 14,
+        "max_pixels": 64 * 28 * 28,
+    }
+
+    if images is not None and all(i is None for i in images):
+        images = None
+    if videos is not None and all(v is None for v in videos):
+        videos = None
+
+    # Drop invalid visuals (min side < 28) to avoid qwen2_vl resize errors.
+    # NOTE: keep batch alignment; never remove outer samples.
+    if images is not None:
+        fixed_images = []
+        for img in images:
+            if img is None:
+                fixed_images.append(None)
+                continue
+            if isinstance(img, list):
+                resized = []
+                for im in img:
+                    if isinstance(im, PIL.Image.Image):
+                        w, h = im.size
+                        if w < 28 or h < 28:
+                            continue
+                    resized.append(im)
+                fixed_images.append(resized if resized else None)
+            else:
+                if isinstance(img, PIL.Image.Image):
+                    w, h = img.size
+                    if w < 28 or h < 28:
+                        img = None
+                fixed_images.append(img)
+        images = fixed_images
+        # nvomniembed image processor expects List[PIL] without None entries.
+        if any(img is None for img in images):
+            images = None
+        else:
+            flattened = []
+            for img in images:
+                if isinstance(img, list):
+                    flattened.append(img[0] if img else None)
+                else:
+                    flattened.append(img)
+            if any(img is None for img in flattened):
+                images = None
+            else:
+                images = flattened
+
+    if videos is not None:
+        inputs = processor(text=texts, videos=videos, audio=audios, **call_kwargs)
+    elif images is not None:
+        inputs = processor(text=texts, images=images, audio=audios, **call_kwargs)
+    else:
+        inputs = processor(text=texts, audio=audios, **call_kwargs)
+
+    feats = inputs.get("input_features", None)
+    fam = inputs.get("feature_attention_mask", None)
+    if isinstance(feats, torch.Tensor) and feats.dim() == 3:
+        # Expect (B, C=128, T) for qwen2_5_omni audio.
+        if feats.shape[1] != 128 and feats.shape[2] == 128:
+            feats = feats.transpose(1, 2)
+        if fam is None:
+            fam = torch.ones(feats.shape[0], feats.shape[2], dtype=torch.long)
+        if isinstance(fam, torch.Tensor) and fam.dim() == 2:
+            if fam.shape[1] != feats.shape[2]:
+                min_len = min(fam.shape[1], feats.shape[2])
+                feats = feats[:, :, :min_len]
+                fam = fam[:, :min_len]
+            inputs["input_features"] = feats
+            inputs["feature_attention_mask"] = fam
+
+    # Drop qwen2_5_omni-specific fields to avoid forward arg mismatch.
+    inputs.pop("audio_attention_mask", None)
+    inputs.pop("audio_feature_lengths", None)
+    return inputs
 
 
 def e5_v_prompt_template(text, add_video_token, add_image_token):
@@ -960,6 +1098,7 @@ process_vlm_inputs_fns = {
     QWEN2_VL_TOKENSELECTION: Qwen2_VL_TokenSelection_process_fn,
     QWEN2_5_VL_TOKENSELECTION: Qwen2_VL_TokenSelection_process_fn,
     QWEN2_5_OMNI: Omni_process_fn,
+    NVOMNIEMBED: NVOmni_process_fn,
     INTERNVIDEO2: InternVideo2_process_fn,
     GME: Gme_process_fn,
     LamRA: Gme_process_fn,

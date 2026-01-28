@@ -1,0 +1,31 @@
+Clotho_text_audio:
+    dataset_parser: load_audio_clotho_dataset
+    data_path: /code/.cache/datasets/MMEB-v2_1/audio-tasks/clotho
+    captions_csv: clotho_captions_development.csv
+    audio_subdir: train/development
+    weight: 1
+
+AVE_audio_video:
+    dataset_parser: load_audio_ave_dataset
+    data_path: /code/.cache/datasets/MMEB-v2_1/audio-tasks/AVE/AVE_Dataset
+    split_file: trainSet.txt
+    audio_dir: audios
+    video_dir: AVE
+    frame_root: /code/.cache/datasets/MMEB-v2_1/audio-tasks/AVE/AVE_Dataset/frames
+    num_frames: 8
+    max_frames_saved: 100
+    weight: 1
+
+UrbanSound8K_audio_cls:
+    dataset_parser: load_audio_urbansound8k_dataset
+    data_path: /code/.cache/datasets/MMEB-v2_1/audio-tasks/urbansound8k
+    dataset_split: train
+    weight: 1
+
+TUTSound_audio_audio:
+    dataset_parser: build_tutsound_audio_dataset
+    data_path: /code/.cache/datasets/MMEB-v2_1/audio-tasks/TUTSound
+    stratify_by: label_name
+    max_per_label: 100
+    require_pos_diff_fp: true
+    weight: 1

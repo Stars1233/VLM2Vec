@@ -19,6 +19,7 @@ class ModelArguments:
     lora_alpha: int = field(default=64, metadata={"help": "lora alpha"})
     lora_dropout: float = field(default=0.1, metadata={"help": "lora dropout"})
     lora_target_modules: str = field(default="qkv_proj,o_proj,gate_up_proj,down_proj,k_proj,q_proj,out_proj,v_proj", metadata={"help": "lora target modules"})
+    full_finetune: bool = field(default=False, metadata={"help": "train all parameters (disable embedding-only freezing)"})
     num_crops: int = field(default=16, metadata={"help": "number of crops used in image encoder"})
     uigraph_use: bool = field(default=False, metadata={"help": "Enable ui graph for token selection"})
     uigraph_diff: int = field(default=1, metadata={"help": "Pixel difference used for constructing ui graph for token selection"})
@@ -47,6 +48,8 @@ class DataArguments:
     resize_max_pixels: int = field(default=28*28*1280, metadata={"help": "The max pixels of the image to resize the image. This is only works when `--resize_use_processor true`."})
     image_decay_factor: float = field(default=None, metadata={"help": "The image decay factor for resizing temporal images"})
     num_hardneg: int = field(default=0, metadata={"help": "hard negative number"})
+    video_max_frames: int = field(default=4, metadata={"help": "Max video frames per sample in training"})
+    video_frame_size: int = field(default=224, metadata={"help": "Square frame size for video frames (pixels)"})
 
 
 @dataclass
@@ -63,6 +66,19 @@ class TrainingArguments(TrainingArguments):
     gc_p_chunk_size: int = field(default=2, metadata={"help": "target side subset size"})
     interleave_stopping_strategy: str = field(default="all_exhausted", metadata={"help": "all_exhausted or first_exhausted"})
     interleave_batch_size: float = field(default=0, metadata={"help": "Specify mini-batch size to interleave data from multi-sources, 0/None means random sampling by examples, 1 means full batch."})
+    export_full_checkpoint: int = field(default=0, metadata={"help": "Export full HF dir at a specific checkpoint step; 0 disables."})
+
+    def __post_init__(self):
+        # Ensure base TrainingArguments initialization runs (sets distributed_state, etc.)
+        super().__post_init__()
+        # Some transformers versions don't define distributed_state; keep it for later access.
+        if not hasattr(self, "distributed_state"):
+            self.distributed_state = None
+        # Mirror the base property so callers using the field get the actual device.
+        try:
+            self.device = super().device
+        except Exception:
+            pass
 
 @dataclass
 class MTEBArguments:

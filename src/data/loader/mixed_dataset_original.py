@@ -1,5 +1,4 @@
 from datasets.distributed import split_dataset_by_node
-from datasets import Sequence, Value
 
 from src.data.dataset.base_pair_dataset import AutoPairDataset
 from src.data.dataset.hf_datasets import interleave_datasets
@@ -12,29 +11,8 @@ def init_mixed_dataset(dataset_config, model_args, data_args, training_args):
     probs = [w / w_sum for w in weights]
     world_size = torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
     train_datasets = []
-    image_feature = {
-        "paths": Sequence(Value("string")),
-        "bytes": Sequence(Value("binary")),
-        "resolutions": Sequence(Sequence(Value("int32"), length=2)),
-    }
-    audio_feature = {
-        "path": Value("string"),
-        "bytes": Value("binary"),
-        "start": Value("float32"),
-        "end": Value("float32"),
-    }
-
     for data_idx, (global_dataset_name, dataset_config) in enumerate(dataset_config.items()):
         train_dataset = AutoPairDataset.instantiate(model_args=model_args, data_args=data_args, training_args=training_args, **dataset_config)
-        for col, feature in [
-            ("query_image", image_feature),
-            ("pos_image", image_feature),
-            ("neg_image", image_feature),
-            ("query_audio", audio_feature),
-            ("pos_audio", audio_feature),
-        ]:
-            if col in train_dataset.column_names:
-                train_dataset = train_dataset.cast_column(col, feature)
         print_master(f"\t\tDataset#{data_idx} (dataset_parser={dataset_config.get('dataset_parser', 'n/a')}): {global_dataset_name}, num_rows={train_dataset.num_rows}, prob={probs[data_idx] * 100.0}")
         train_datasets.append(train_dataset)
 
@@ -62,3 +40,4 @@ def init_mixed_dataset(dataset_config, model_args, data_args, training_args):
         train_dataset = split_dataset_by_node(train_dataset, rank=torch.distributed.get_rank(), world_size=world_size)
 
     return train_dataset
+

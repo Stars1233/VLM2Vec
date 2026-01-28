@@ -1,19 +1,19 @@
 """
-AVE 音频->视频检索数据集工具（MSRVTT风格）：
-- 解析 split 文件 (testSet.txt)
-- query: audio
-- candidates: video represented by N frames (List[PIL.Image])
+AVE 音频->视频检索数据集工具（训练用，适配 train_collator_omni）。
+- 解析 split 文件 (train/val/test)
+- query: audio + instruction text
+- pos: video represented by N frames (paths only)
 """
 
 import os
 from typing import List, Dict, Any, Tuple
 
 import datasets
-from PIL import Image
 
 from src.model.processor import process_input_text
 from src.data.eval_dataset.audio_instruction_utils import build_query_text
 from src.utils.vision_utils.vision_utils import save_frames, process_video_frames
+from src.data.dataset.base_pair_dataset import RESOLUTION_MAPPING, AutoPairDataset
 
 
 TASK_INST_TGT = "Understand the content of the provided video."
@@ -44,28 +44,54 @@ def parse_ave_split(split_file: str) -> List[Dict[str, Any]]:
     return samples
 
 
-def load_audio_ave_dataset(path_info: Tuple[str, str, str], **kwargs):
-    """
-    返回 (dataset, corpus=None)
+def _resolve_split_file(split: str, default_name: str) -> str:
+    if not split:
+        return default_name
+    split = split.lower()
+    if split.endswith(".txt"):
+        return split
+    mapping = {
+        "train": "trainSet.txt",
+        "training": "trainSet.txt",
+        "val": "valSet.txt",
+        "valid": "valSet.txt",
+        "dev": "valSet.txt",
+        "test": "testSet.txt",
+    }
+    return mapping.get(split, default_name)
 
-    query:
+
+@AutoPairDataset.register("load_audio_ave_dataset")
+def load_audio_ave_dataset(*args: Any, **kwargs: Any):
+    """
+    返回 (dataset, corpus=None)，用于训练：
       - query_text: List[str]（只放一个指令）
-      - query_audio: [{"path": ..., "bytes": None}]
-
-    candidates (global fixed pool):
-      - cand_video: List[List[PIL.Image]]  (num_frames=8)
-      - cand_text:  List[str] (带 video token 的指令)
+      - query_audio: {"path": ..., "bytes": None}
+      - pos_text: 带 video token 的指令
+      - pos_image: 视频帧路径 (dict: paths/bytes/resolutions)
     """
-    data_path = path_info[0]
-    split_file: str = kwargs.get("split_file", "testSet.txt")
+    path_info = kwargs.get("path_info")
+    if path_info is not None:
+        data_path, _, split = path_info
+    else:
+        data_path = kwargs.get("data_path")
+        split = kwargs.get("dataset_split") or kwargs.get("split") or ""
+    if not data_path:
+        raise ValueError("[AVE] data_path is required")
+    split_file: str = kwargs.get("split_file", _resolve_split_file(split, "trainSet.txt"))
     audio_dir: str = kwargs.get("audio_dir", "audios")
     video_dir: str = kwargs.get("video_dir", "AVE")
 
     frame_root: str = kwargs.get("frame_root", os.path.join(data_path, "frames"))
     num_frames: int = kwargs.get("num_frames", 8)
     max_frames_saved: int = kwargs.get("max_frames_saved", 100)
+    image_resolution: str = kwargs.get("image_resolution", "low")
 
     model_backbone = kwargs.get("model_backbone", None)
+    if model_backbone is None:
+        model_args = kwargs.get("model_args")
+        if model_args is not None:
+            model_backbone = getattr(model_args, "model_backbone", None)
     if model_backbone is None:
         raise ValueError("[AVE] model_backbone is required")
 
@@ -79,10 +105,10 @@ def load_audio_ave_dataset(path_info: Tuple[str, str, str], **kwargs):
 
     samples = parse_ave_split(split_path)
 
-    # 1) 过滤掉缺失音频 / 缺失视频的样本（重点：音频文件名是 clip_id.wav）
-    audio_records = []
+    # 1) 过滤掉缺失音频 / 缺失视频的样本（音频文件名是 video_id + '_' + clip_id）
+    audio_records: List[Dict[str, Any]] = []
     for s in samples:
-        audio_abs = os.path.join(audio_root, f"{s['clip_id']}.wav")  # ✅ FIX
+        audio_abs = os.path.join(audio_root, f"{s['video_id']}_{s['clip_id']}.wav")
         video_abs = os.path.join(video_root, f"{s['video_id']}.mp4")
         if not os.path.isfile(audio_abs):
             continue
@@ -94,76 +120,66 @@ def load_audio_ave_dataset(path_info: Tuple[str, str, str], **kwargs):
                 "video_id": s["video_id"],
                 "clip_id": s["clip_id"],
                 "audio_path": audio_abs,
+                "video_path": video_abs,
             }
         )
 
-    # 2) 候选池：所有 unique video_id（从有效样本里取，最稳）
-    cand_names = sorted(list({r["video_id"] for r in audio_records}))
-    vid2idx = {vid: i for i, vid in enumerate(cand_names)}
+    if not audio_records:
+        raise FileNotFoundError("[AVE] no valid audio/video pairs found after filtering")
 
-    # 3) 候选文本（带 video token）
-    cand_inst = process_input_text(TASK_INST_TGT, model_backbone, add_video_token=True)
-    cand_text = [cand_inst for _ in cand_names]
+    # 2) 构造训练样本（query: audio, pos: video frames）
+    query_texts: List[List[str]] = []
+    query_images: List[Any] = []
+    query_audios: List[Dict[str, Any]] = []
+    pos_texts: List[str] = []
+    pos_images: List[Dict[str, Any]] = []
+    pos_audios: List[Any] = []
+    dataset_infos: List[Dict[str, Any]] = []
 
-    # 4) 候选视频 -> N 帧（PIL.Image），MSRVTT风格
-    cand_video = []
-    for vid in cand_names:
-        video_path = os.path.join(video_root, f"{vid}.mp4")
-        frame_dir = os.path.join(frame_root, vid)
-
-        # 抽帧
-        save_frames(video_path=video_path, frame_dir=frame_dir, max_frames_saved=max_frames_saved)
-        frame_paths = process_video_frames(frame_dir, num_frames=num_frames)
-
-        frames: List[Image.Image] = []
-        for p in frame_paths:
-            if os.path.exists(p):
-                frames.append(Image.open(p).convert("RGB"))
-            else:
-                frames.append(Image.new("RGB", (224, 224), (0, 0, 0)))
-        # 保证长度
-        if len(frames) < num_frames:
-            frames += [Image.new("RGB", (224, 224), (0, 0, 0))] * (num_frames - len(frames))
-        cand_video.append(frames)
-
-    # 5) 构造 query 部分
-    query_texts = []
-    query_audios = []
-    dataset_infos = []
+    pos_text = process_input_text(TASK_INST_TGT, model_backbone, add_video_token=True)
+    resolution = RESOLUTION_MAPPING.get(image_resolution, None)
 
     for r in audio_records:
-        # query text（你们统一用 build_query_text("AVE")）
         qt = build_query_text("AVE")
         assert isinstance(qt, list) and len(qt) == 1 and isinstance(qt[0], str) and qt[0].strip()
         query_texts.append(qt)
+        query_images.append(None)
+        query_audios.append({"path": r["audio_path"], "bytes": None, "start": None, "end": None})
 
-        # query audio
-        query_audios.append([{"path": r["audio_path"], "bytes": None}])
+        frame_dir = os.path.join(frame_root, r["video_id"])
+        save_frames(video_path=r["video_path"], frame_dir=frame_dir, max_frames_saved=max_frames_saved)
+        frame_paths = process_video_frames(frame_dir, num_frames=num_frames)
+        if not frame_paths:
+            frame_paths = [None]
 
-        # label
-        lid = vid2idx[r["video_id"]]
+        pos_texts.append(pos_text)
+        pos_images.append(
+            {
+                "paths": frame_paths,
+                "bytes": [None] * len(frame_paths),
+                "resolutions": [resolution] * len(frame_paths),
+            }
+        )
+        pos_audios.append(None)
+
         dataset_infos.append(
             {
-                "label_cand_id": lid,
-                "label_name": r["video_id"],
-                "cand_names": cand_names,
-                "query_id": r["clip_id"],
-                "corpus_id": r["video_id"],
+                "video_id": r["video_id"],
+                "clip_id": r["clip_id"],
                 "category": r["category"],
             }
         )
 
-    bs = len(query_texts)
     dataset = datasets.Dataset.from_dict(
         {
             "query_text": query_texts,
-            "query_image": [[None]] * bs,
+            "query_image": query_images,
             "query_audio": query_audios,
-            "cand_text": [cand_text] * bs,
-            "cand_video": [cand_video] * bs,
+            "pos_text": pos_texts,
+            "pos_image": pos_images,
+            "pos_audio": pos_audios,
             "dataset_infos": dataset_infos,
         }
     )
 
-    corpus = None
-    return dataset, corpus
+    return dataset

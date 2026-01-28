@@ -1,206 +1,352 @@
-from itertools import repeat
-from typing import Optional
-from torch.jit import isinstance
-
-import logging
 from dataclasses import dataclass
-from transformers import ProcessorMixin, AutoProcessor, AutoTokenizer
-from src.arguments import DataArguments, ModelArguments, TrainingArguments
-import torch
-from qwen_vl_utils import smart_resize
-
-from src.model.processor import LLAVA_NEXT, QWEN2_VL, QWEN2_5_VL, \
-    QWEN2_VL_TOKENSELECTION, QWEN2_5_VL_TOKENSELECTION, PHI3V, process_vlm_inputs_fns
-from PIL import Image
+from typing import Optional, Any, Dict, List, Tuple
 import io
-from src.utils.basic_utils import print_rank, print_master
-
-
-logger = logging.getLogger(__name__)
-
-
-PHI_IMAGE_TOKEN_MAX_INPUT_ID = int(1e9)
-LLAVA_IMAGE_TOKEN_ID = 32000
-
-
-def split_and_process_vlm_inputs(model_input: dict, chunk_size: int):
-    assert len(model_input) == 1
-    arg_key = list(model_input.keys())[0]
-    arg_val = model_input[arg_key]
-
-    keys = list(arg_val.keys())
-    chunked_tensors = []
-    for k in keys:
-        if isinstance(arg_val[k], torch.Tensor):
-            chunked_tensor = arg_val[k].split(chunk_size, dim=0)
-        else:
-            chunked_tensor = [arg_val[k][i: i + chunk_size] for i in list(range(0, len(arg_val[k]), chunk_size))]
-        chunked_tensors.append(chunked_tensor)
-    chunked_arg_val = [dict(zip(kk, tt)) for kk, tt in zip(repeat(keys), zip(*chunked_tensors))]
-    chunked_inputs = [{arg_key: c} for c in chunked_arg_val]
-
-    return chunked_inputs
-
-
-def split_vlm_inputs(model_input: dict, chunk_size: int):
-    assert len(model_input) == 1
-    arg_key = list(model_input.keys())[0]
-    arg_val = model_input[arg_key]
-    keys = list(arg_val.keys())
-
-    # for input_ids and attention_mask, split directly
-    chunked_tensors = [arg_val[k].split(chunk_size, dim=0) for k in ["input_ids", "attention_mask"]]
-
-    # for pixel_values and image_sizes, need to split based on the position of images
-    input_ids = arg_val["input_ids"]
-    # positions = torch.nonzero(((input_ids < 0) & (input_ids > -MAX_INPUT_ID)) | input_ids == LLAVE_IMAGE_TOKEN_ID, as_tuple=True)
-    positions = torch.nonzero((input_ids < 0) & (input_ids > -PHI_IMAGE_TOKEN_MAX_INPUT_ID), as_tuple=True)
-    row_contain_image = torch.unique(positions[0])  # indicates which row in input_ids contain images
-    num_chunks = len(chunked_tensors[0])
-    chunk_image_count = []
-    for chunk_idx in range(num_chunks):
-        chunk_image_count.append(torch.sum(
-            (row_contain_image >= chunk_idx * chunk_size) & (row_contain_image < (chunk_idx + 1) * chunk_size)).item())
-    if "pixel_values" in keys:
-        pixel_values = arg_val["pixel_values"]
-        image_sizes = arg_val["image_sizes"]
-        chunked_tensors.append(torch.split(pixel_values, chunk_image_count))
-        chunked_tensors.append(torch.split(image_sizes, chunk_image_count))
-
-    chunked_arg_val = []
-    for kk, tt in zip(repeat(keys), zip(*chunked_tensors)):
-        if "pixel_values" in keys and tt[2].numel() == 0:  # this chunk doesn't contain image
-            chunked_arg_val.append(dict(zip(kk[:2], tt[:2])))
-        else:
-            chunked_arg_val.append(dict(zip(kk, tt)))
-
-    return [{arg_key: c} for c in chunked_arg_val]
-
-
-def get_dense_rep(x):
-    """
-    Get either qry_reps or tgt_reps.
-    """
-    if x["qry_reps"] is None:
-        return x["tgt_reps"]
-    else:
-        return x["qry_reps"]
-
+import random
+import torch
+import torchaudio
+from PIL import Image
+from transformers import ProcessorMixin
 
 @dataclass
-class TrainTextImageDataCollator:
-    data_args: DataArguments
-    model_args: ModelArguments
+class OmniAutoProcessorCollator:
     processor: ProcessorMixin
+    data_args: Any
+    model_args: Any
+    training_args: Any
+    batch_size: Optional[int] = None
 
-    def __call__(self, examples):
+    # ---------- helpers ----------
+    def _clean_image_list(self, imgs):
+        """Remove None frames; return None if empty."""
+        if imgs is None:
+            return None
+        if isinstance(imgs, list):
+            imgs = [im for im in imgs if im is not None]
+            return imgs if len(imgs) > 0 else None
+        return imgs  # single PIL or None
+
+    def _split_visual(self, visual):
         """
-        :param examples: qry, qry_image, pos_text, pos_image
+        Split visual into image or video.
+        - image: PIL.Image or list length 1
+        - video: list length >1
+        Returns (image, video).
         """
-        qry_inputs = self._get_batch_inputs(examples, "query_text", "query_image")
-        pos_inputs = self._get_batch_inputs(examples, "pos_text", "pos_image")
-        neg_inputs = self._get_batch_inputs(examples, "neg_text", "neg_image")
-        return qry_inputs, pos_inputs
+        if visual is None:
+            return None, None
+        if isinstance(visual, list):
+            visual = [v for v in visual if v is not None]
+            if not visual:
+                return None, None
+            if len(visual) > 1:
+                return None, visual
+            return [visual[0]], None
+        return [visual], None
 
-    def _get_batch_inputs(self, examples, text_keyname, image_keyname):
-        texts, images = [], []
-        for example in examples:
-            # @ruimeng filter invalid data examples here will lead to fail to sync across devices (unequal batch size)
-            # use dummy input for now
-            if example is None or not example:
-                text, image = '  ', None
-            text, image = example[text_keyname], example[image_keyname]
-            if type(text) == list:
-                if len(text) == 0 or len(image) == 0:
-                    text, image = '  ', None
-                else:
-                    text, image = text[0], image[0]
-            texts.append(text)
-            images.append(image)
-        inputs = {'text': texts, 'image': images}
-        return inputs
+    def _random_window(self, items, max_frames: int):
+        if items is None or not isinstance(items, list):
+            return items
+        if max_frames <= 0 or len(items) <= max_frames:
+            return items
+        start = random.randint(0, len(items) - max_frames)
+        return items[start : start + max_frames]
 
+    def _load_image_from_dict(self, raw_images: dict, example: dict):
+        """
+        raw_images format assumed similar to your current code:
+          - 'resolutions' list determines num images/frames
+          - 'bytes' or 'paths' optional lists
+        """
+        if not isinstance(raw_images, dict) or "resolutions" not in raw_images:
+            return None
+        visual = []
+        num_images = len(raw_images["resolutions"])
+        for i in range(num_images):
+            b = raw_images.get("bytes", [None]*num_images)[i] if "bytes" in raw_images else None
+            p = raw_images.get("paths", [None]*num_images)[i] if "paths" in raw_images else None
 
-@dataclass
-class MultimodalDataCollator:
-    processor: ProcessorMixin
-    model_args: ModelArguments
-    data_args: DataArguments
-    training_args: TrainingArguments
-    batch_size: Optional[int] = None  # used to verify if a batch has invalid data
-
-    def _get_batch_inputs(self, batch, text_keyname, image_keyname):
-        texts, visual_inputs = [], []
-        for example in batch:
-            # @ruimeng filter invalid data examples here may lead to fail to sync across devices (unequal batch size)
-            # use dummy input for now
-            if example is None or not example:
-                text, visual_input = '  ', None
+            if b is not None:
+                im = Image.open(io.BytesIO(b)).convert("RGB")
+            elif p is not None:
+                with Image.open(p) as img:
+                    im = img.convert("RGB")
             else:
-                text, raw_images = example[text_keyname], example[image_keyname]
-                if type(raw_images) == dict:
-                    visual_input = []
-                    assert 'resolutions' in raw_images, "we need len(raw_images['resolutions']) to determine the number of images, set it a list of None of for cases that no resizing is needed"
-                    num_images = len(raw_images['resolutions'])
-                    for image_idx in range(num_images):
-                        bytes = raw_images['bytes'][image_idx] if 'bytes' in raw_images else None
-                        path = raw_images['paths'][image_idx] if 'paths' in raw_images else None
-                        image_resolution = raw_images['resolutions'][image_idx] if 'resolutions' in raw_images else None
-                        if bytes is None and path is None:
-                            image = None
-                        elif bytes is not None:
-                            # vidore, image inputs are already bytes
-                            image = Image.open(io.BytesIO(bytes))
-                        elif path is not None:
-                            # mmeb/video datasets, lazy image loading and processing
-                            with Image.open(path) as img:
-                                image = img.convert("RGB")
-                        else:
-                            print_rank(f"\n{'=' * 50}\nsomething went wrong with a data point from {example['global_dataset_name']}, neither bytes or path is given. \n\t\tquery_text: {example['query_text']}")
-                        if not self.data_args.resize_use_processor and image is not None and image_resolution:
-                            image = image.resize(image_resolution)
-                        if image is not None and (self.data_args.image_decay_factor is not None and image_resolution is None):
-                            assert image_resolution is None, "image_resolution is conflicting with image_decay_factor"
-                            assert self.model_args.model_backbone in [QWEN2_VL, QWEN2_5_VL, QWEN2_VL_TOKENSELECTION, QWEN2_5_VL_TOKENSELECTION], "image_decay_factor is only supported for Qwen models"
-                            # TODO: this is a hacky way to decay image resolution, need to be refactored
-                            max_pixels = max(self.data_args.resize_min_pixels, self.data_args.resize_max_pixels * self.data_args.image_decay_factor ** (num_images - image_idx))
-                            width, height = image.size
-                            resized_height, resized_width = smart_resize(
-                                height,
-                                width,
-                                min_pixels=self.data_args.resize_min_pixels,
-                                max_pixels=max_pixels,
-                            )
-                            image = image.resize((resized_width, resized_height))  
-                        visual_input.append(image)
+                im = None
+            visual.append(im)
+
+        # optional video frame subsample
+        max_frames = getattr(self.data_args, "video_max_frames", 0) or 0
+        if max_frames > 0:
+            visual = self._random_window(visual, max_frames)
+
+        # optional resize each frame to square
+        frame_size = getattr(self.data_args, "video_frame_size", None)
+        if frame_size:
+            visual = [(im.resize((frame_size, frame_size)) if im is not None else None) for im in visual]
+
+        return self._clean_image_list(visual)
+
+    def _load_audio_batch(self, audio_items: List[Any]) -> Tuple[List[Optional[torch.Tensor]], int]:
+        target_sr = int(getattr(self.data_args, "audio_sample_rate", 16000) or 16000)
+        min_audio_samples = getattr(self.data_args, "audio_min_samples", None)
+        if min_audio_samples is None:
+            min_audio_samples = int(target_sr * 0.025)  # 25ms
+
+        max_audio_seconds = getattr(self.data_args, "audio_max_seconds", None)
+        if max_audio_seconds is not None:
+            max_audio_samples = int(float(max_audio_seconds) * target_sr)
+        else:
+            max_audio_frames = int(getattr(self.data_args, "audio_max_frames", 1024))
+            max_audio_samples = max_audio_frames * 160
+
+        out = []
+        for item in audio_items:
+            if item is None:
+                out.append(None)
+                continue
+
+            # HF dataset style: {"array":..., "sampling_rate":...}
+            if isinstance(item, dict) and "array" in item:
+                wav = torch.tensor(item["array"], dtype=torch.float32)
+                sr = int(item.get("sampling_rate", target_sr))
+                if wav.ndim > 1:
+                    wav = wav.mean(0)
+                if sr != target_sr:
+                    wav = torchaudio.functional.resample(wav, sr, target_sr)
+                if wav.numel() < min_audio_samples:
+                    out.append(None)
+                    continue
+                if wav.numel() > max_audio_samples:
+                    start = random.randint(0, wav.numel() - max_audio_samples)
+                    wav = wav[start : start + max_audio_samples]
+                out.append(wav)
+                continue
+
+            # Tensor wav
+            if isinstance(item, torch.Tensor):
+                wav = item.float()
+                if wav.ndim > 1:
+                    wav = wav.mean(0)
+                if wav.numel() < min_audio_samples:
+                    out.append(None)
+                    continue
+                if wav.numel() > max_audio_samples:
+                    start = random.randint(0, wav.numel() - max_audio_samples)
+                    wav = wav[start : start + max_audio_samples]
+                out.append(wav)
+                continue
+
+            # Dict with path/bytes (+ optional start/end)
+            if isinstance(item, dict):
+                a_path = item.get("path") or item.get("audio_path") or item.get("video_path")
+                a_bytes = item.get("bytes", None)
+                start_t = float(item.get("start", 0.0) or 0.0)
+                end_v = item.get("end", None)
+                end_t = float(end_v) if end_v is not None else None
+
+                if a_bytes is not None:
+                    wave, sr = torchaudio.load(io.BytesIO(a_bytes))
+                elif a_path:
+                    info = torchaudio.info(a_path)
+                    sr = info.sample_rate
+                    frame_offset = int(start_t * sr)
+                    num_frames = int((end_t - start_t) * sr) if end_t is not None else -1
+                    if num_frames == 0:
+                        out.append(None)
+                        continue
+                    wave, _ = torchaudio.load(a_path, frame_offset=frame_offset, num_frames=num_frames)
                 else:
-                    visual_input = None
-            texts.append(text)
-            visual_inputs.append(visual_input)
-        inputs = {'text': texts, 'images': visual_inputs}
-        return inputs
+                    out.append(None)
+                    continue
 
+                if wave.numel() < min_audio_samples:
+                    out.append(None)
+                    continue
+                if wave.ndim > 1:
+                    wave = wave.mean(0)
+                if sr != target_sr:
+                    wave = torchaudio.functional.resample(wave, sr, target_sr)
+                if wave.numel() > max_audio_samples:
+                    start = random.randint(0, wave.numel() - max_audio_samples)
+                    wave = wave[start : start + max_audio_samples]
+                out.append(wave)
+                continue
 
-    def __call__(self, examples):
-        """
-        :param examples: 'query_text', 'query_image_path', 'pos_text', 'pos_image_path', 'neg_text', 'neg_image_path'
-        """
-        qry_inputs = self._get_batch_inputs(examples, "query_text", "query_image")
-        pos_inputs = self._get_batch_inputs(examples, "pos_text", "pos_image")
-        neg_inputs = self._get_batch_inputs(examples, "neg_text", "neg_image")
-        bs = len(qry_inputs['text'])
-        assert bs > 0, 'An empty batch'
-        # pad batch to batch_size to avoid hanging in distributed training
-        if self.batch_size is not None and bs < self.batch_size:
-            raise RuntimeError(f"Expect batch size {self.batch_size}, but got batch size of {bs}")
-            pass
-        process_fn = process_vlm_inputs_fns[self.training_args.model_backbone]
-        processed_qry_inputs = process_fn(qry_inputs, processor=self.processor, max_length=self.data_args.max_len)
-        processed_pos_inputs = process_fn(pos_inputs, processor=self.processor, max_length=self.data_args.max_len)
-        processed_qry_inputs['text'] = [e['query_text'] for e in examples]
-        processed_pos_inputs['text'] = [e['pos_text'] for e in examples]
-        processed_qry_inputs['global_dataset_name'] = [e['global_dataset_name'] for e in examples]
-        processed_pos_inputs['global_dataset_name'] = [e['global_dataset_name'] for e in examples]
+            raise ValueError(f"Unsupported audio item type: {type(item)}")
 
-        # print_rank(f"\t\tQry collator: processed_qry_inputs['input_ids'].shape={processed_qry_inputs['input_ids'].shape}\t\tPos collator: processed_pos_inputs['input_ids'].shape={processed_pos_inputs['input_ids'].shape}")
-        return processed_qry_inputs, processed_pos_inputs
+        return out, target_sr
+
+    def _extract_raw(self, examples: List[dict], text_key: str, image_key: str, audio_key: Optional[str]):
+        texts, images, audios = [], [], []
+        for ex in examples:
+            if ex is None or not ex:
+                texts.append(" ")
+                images.append(None)
+                audios.append(None)
+                continue
+
+            t = ex.get(text_key, " ")
+            raw_img = ex.get(image_key, None)
+            raw_aud = ex.get(audio_key, None) if audio_key else None
+
+            # if list wrappers exist
+            if isinstance(t, list):
+                t = t[0] if len(t) > 0 else " "
+            if isinstance(raw_img, list):
+                raw_img = raw_img[0] if len(raw_img) > 0 else None
+            if isinstance(raw_aud, list):
+                raw_aud = raw_aud[0] if len(raw_aud) > 0 else None
+
+            # normalize image/video
+            if isinstance(raw_img, dict):
+                img = self._load_image_from_dict(raw_img, ex)
+            elif isinstance(raw_img, list):
+                img = self._clean_image_list(raw_img)
+            else:
+                img = raw_img  # PIL or None
+
+            texts.append(t)
+            images.append(img)
+            audios.append(raw_aud)
+
+        return texts, images, audios
+
+    def _sig(self, img, vid, aud):
+        has_a = aud is not None
+        has_i = img is not None
+        has_v = vid is not None
+        return (has_i, has_v, has_a)
+
+    def _process_group(self, texts, images, videos, audios, max_length: int):
+        kwargs = dict(
+            text=texts,
+            padding=True,
+            truncation=True,
+            max_length=max_length,
+            return_tensors="pt",
+        )
+        has_images = any(im is not None for im in images)
+        has_videos = any(v is not None for v in videos)
+        if has_images and has_videos:
+            raise ValueError("OmniAutoProcessorCollator: cannot mix images and videos in the same group.")
+        if has_images:
+            kwargs["images"] = images
+        if has_videos:
+            kwargs["videos"] = videos
+        if any(a is not None for a in audios):
+            kwargs["audios"] = audios
+            kwargs["sampling_rate"] = int(getattr(self.data_args, "audio_sample_rate", 16000) or 16000)
+
+        return self.processor(**kwargs)
+
+    # ---------- main ----------
+    def __call__(self, examples: List[dict]):
+        # fixed batch size check
+        if self.batch_size is not None and len(examples) < self.batch_size:
+            raise RuntimeError(f"Expect batch size {self.batch_size}, but got {len(examples)}")
+
+        # raw
+        q_texts, q_imgs_raw, q_auds = self._extract_raw(examples, "query_text", "query_image", "query_audio")
+        p_texts, p_imgs_raw, p_auds = self._extract_raw(examples, "pos_text", "pos_image", "pos_audio")
+
+        # decode audio tensors only for those that exist (avoid dummy audio)
+        q_wavs, q_sr = self._load_audio_batch(q_auds)
+        p_wavs, p_sr = self._load_audio_batch(p_auds)
+
+        q_imgs, q_vids = [], []
+        p_imgs, p_vids = [], []
+        for qi, pi in zip(q_imgs_raw, p_imgs_raw):
+            q_img, q_vid = self._split_visual(qi)
+            p_img, p_vid = self._split_visual(pi)
+            q_imgs.append(q_img)
+            q_vids.append(q_vid)
+            p_imgs.append(p_img)
+            p_vids.append(p_vid)
+
+        # valid mask: any sample with audio specified but failed to load -> invalid
+        valid = []
+        for qa, qw, pa, pw in zip(q_auds, q_wavs, p_auds, p_wavs):
+            ok = True
+            if qa is not None and qw is None:
+                ok = False
+            if pa is not None and pw is None:
+                ok = False
+            valid.append(ok)
+
+        # replace invalid samples with pure text dummy (keeps batch size stable)
+        for i, ok in enumerate(valid):
+            if not ok:
+                q_texts[i], p_texts[i] = " ", " "
+                q_imgs[i], p_imgs[i] = None, None
+                q_vids[i], p_vids[i] = None, None
+                q_wavs[i], p_wavs[i] = None, None
+
+        # group by modality signature to keep processor assumptions clean
+        idxs = list(range(len(examples)))
+        groups = {}
+        for i in idxs:
+            s = (
+                self._sig(q_imgs[i], q_vids[i], q_wavs[i]),
+                self._sig(p_imgs[i], p_vids[i], p_wavs[i]),
+            )
+            groups.setdefault(s, []).append(i)
+
+        max_len = int(getattr(self.data_args, "max_len", 256))
+
+        def _merge(out_list: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+            # out_list already per-group; we need reconstruct per-example order.
+            # We'll build dict of lists then stack/pad is already done by processor.
+            merged = {}
+            for out in out_list:
+                for k, v in out.items():
+                    merged.setdefault(k, []).append(v)
+            # concatenate along batch dim
+            final = {}
+            for k, chunks in merged.items():
+                if isinstance(chunks[0], torch.Tensor):
+                    final[k] = torch.cat(chunks, dim=0)
+                else:
+                    # e.g. lists (rare from processor), keep concatenation
+                    tmp = []
+                    for c in chunks:
+                        tmp.extend(c)
+                    final[k] = tmp
+            return final
+
+        # process qry/pos in matching grouping to preserve alignment
+        qry_outs = []
+        pos_outs = []
+        order_chunks = []
+
+        for s, sub in groups.items():
+            # keep sub order stable
+            sub_q_text = [q_texts[i] for i in sub]
+            sub_q_img  = [q_imgs[i] for i in sub]
+            sub_q_vid  = [q_vids[i] for i in sub]
+            sub_q_wav  = [q_wavs[i] for i in sub]
+
+            sub_p_text = [p_texts[i] for i in sub]
+            sub_p_img  = [p_imgs[i] for i in sub]
+            sub_p_vid  = [p_vids[i] for i in sub]
+            sub_p_wav  = [p_wavs[i] for i in sub]
+
+            q_proc = self._process_group(sub_q_text, sub_q_img, sub_q_vid, sub_q_wav, max_len)
+            p_proc = self._process_group(sub_p_text, sub_p_img, sub_p_vid, sub_p_wav, max_len)
+
+            qry_outs.append(q_proc)
+            pos_outs.append(p_proc)
+            order_chunks.append(sub)
+
+        # merge
+        qry_batch = _merge(qry_outs)
+        pos_batch = _merge(pos_outs)
+
+        # attach metadata
+        qry_batch["valid_example_mask"] = torch.tensor(valid, dtype=torch.bool)
+        pos_batch["valid_example_mask"] = torch.tensor(valid, dtype=torch.bool)
+
+        # for debug / hash you can still attach raw texts if you want
+        qry_batch["text"] = q_texts
+        pos_batch["text"] = p_texts
+
+        return qry_batch, pos_batch

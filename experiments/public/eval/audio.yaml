@@ -63,5 +63,4 @@ TUTSound:
     dataset_name: TUTSound
     dataset_split: test
     audio_root: /code/.cache/datasets/MMEB-v2_1/audio-tasks/TUTSound
-    eval_type: global
-
+    eval_type: local

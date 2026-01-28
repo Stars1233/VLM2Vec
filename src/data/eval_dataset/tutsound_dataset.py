@@ -7,6 +7,7 @@ import os
 from typing import Dict, List, Tuple, Any
 
 import datasets
+import torchaudio
 from src.utils.dataset_utils import sample_dataset
 from src.data.eval_dataset.audio_instruction_utils import build_query_text
 from src.data.eval_dataset.base_eval_dataset import AutoEvalPairDataset
@@ -35,9 +36,23 @@ def _read_evaluate_file(eval_path: str) -> List[Tuple[str, str, float, float, st
     return rows
 
 
+def _segment_iou(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
+    inter = max(0.0, min(a_end, b_end) - max(a_start, b_start))
+    union = max(a_end, b_end) - min(a_start, b_start)
+    return 0.0 if union <= 0 else inter / union
+
+
+def _seg_id(fp: str, start: float, end: float) -> str:
+    return f"{fp}|{start:.3f}-{end:.3f}"
+
+
 def build_tutsound_audio_dataset(path_info: Tuple[str, str, str], **kwargs):
     dataset_path, subset, split = path_info
     base_dir = os.path.join(dataset_path, "TUT-sound-events-2017-development")
+    neg_win_len = float(kwargs.get("neg_win_len", 1.0))
+    neg_stride = float(kwargs.get("neg_stride", 0.5))
+    iou_thresh = float(kwargs.get("neg_iou_thresh", 0.1))
+    neg_max_per_query = int(kwargs.get("neg_max_per_query", 50))
 
     # 1) 读四个 fold 的 evaluate 文件
     all_rows = []
@@ -61,61 +76,7 @@ def build_tutsound_audio_dataset(path_info: Tuple[str, str, str], **kwargs):
             gt_by_fp[fp] = {"scene": scene, "events": []}
         gt_by_fp[fp]["events"].append({"label": label, "onset": onset, "offset": offset})
 
-    # 3) 构建 corpus：每个 event_label 选一个 exemplar wav（作为全局候选池）
-    exemplar_by_label: Dict[str, str] = {}
-    for fp in sorted(gt_by_fp.keys()):
-        for ev in gt_by_fp[fp]["events"]:
-            lab = ev["label"]
-            if lab not in exemplar_by_label:
-                exemplar_by_label[lab] = fp
-
-    # 全局候选名列表（顺序=corpus行顺序）
-    cand_names: List[str] = []
-    cand_text_corpus: List[List[str]] = []
-    cand_audio_corpus: List[List[Dict[str, Any]]] = []
-    cand_image_corpus: List[List[Any]] = []
-    infos_corpus: List[Dict[str, Any]] = []
-
-    # 候选文本：必须非空（Omni_process_fn 会要求 text 非空）
-    cand_text_item = build_query_text("TUTSound")
-    assert (
-        isinstance(cand_text_item, list)
-        and len(cand_text_item) == 1
-        and isinstance(cand_text_item[0], str)
-        and cand_text_item[0].strip()
-    )
-
-    for lab in sorted(exemplar_by_label.keys()):
-        fp = exemplar_by_label[lab]
-        abs_path = os.path.normpath(os.path.join(base_dir, fp))
-
-        cid = lab  # candidate id = label（稳定）
-        cand_names.append(cid)
-
-        # ✅ corpus 每行一个 candidate，所以 cand_* 都是长度=1 的 list
-        cand_text_corpus.append(cand_text_item)  # List[str] len=1
-        cand_audio_corpus.append([{"path": abs_path, "bytes": None}])
-        cand_image_corpus.append([None])
-
-        # ✅ corpus 行的 dataset_infos：每行 cand_names 必须 len=1
-        infos_corpus.append(
-            {
-                "cand_names": [cid],
-                "label_name": cid,
-                "corpus_id": cid,
-            }
-        )
-
-    corpus = datasets.Dataset.from_dict(
-        {
-            "cand_text": cand_text_corpus,
-            "cand_audio": cand_audio_corpus,
-            "cand_image": cand_image_corpus,
-            "dataset_infos": infos_corpus,
-        }
-    )
-
-    # 4) 构造 query：每个 wav 一条；label_name 是它包含的 event_labels（用于评测）
+    # 3) 构造 query：每个 GT event 一条；候选为同文件片段（含 GT + 背景滑窗）
     query_audio = []
     query_text = []
     query_image = []
@@ -125,32 +86,72 @@ def build_tutsound_audio_dataset(path_info: Tuple[str, str, str], **kwargs):
     dataset_infos = []
 
     wav_list = sorted(gt_by_fp.keys())
+    cand_text_item = build_query_text("TUTSound")
+    assert (
+        isinstance(cand_text_item, list)
+        and len(cand_text_item) == 1
+        and isinstance(cand_text_item[0], str)
+        and cand_text_item[0].strip()
+    )
 
     for fp in wav_list:
         abs_path = os.path.normpath(os.path.join(base_dir, fp))
         info = gt_by_fp[fp]
+        gt_events = info["events"]
 
-        gt_labels = sorted({ev["label"] for ev in info["events"]})
+        try:
+            audio_info = torchaudio.info(abs_path)
+        except Exception as e:
+            raise RuntimeError(f"Failed to read audio info for {abs_path}: {e}") from e
 
-        query_audio.append({"path": abs_path, "bytes": None})
-        query_text.append(cand_text_item)
-        query_image.append([None])
+        audio_dur = float(audio_info.num_frames) / float(audio_info.sample_rate)
+        gt_segments = [(float(ev["onset"]), float(ev["offset"])) for ev in gt_events]
 
-        # ✅ query 不携带候选（global 模式用 corpus）
-        cand_text.append([])
-        cand_image.append([])
-        cand_audio.append([])
+        # 背景滑窗候选（固定长度，最后一窗不满则丢弃）
+        neg_segments = []
+        if neg_win_len > 0 and neg_stride > 0 and audio_dur >= neg_win_len:
+            t = 0.0
+            while t + neg_win_len <= audio_dur:
+                seg_start = t
+                seg_end = t + neg_win_len
+                max_iou = 0.0
+                for gs, ge in gt_segments:
+                    max_iou = max(max_iou, _segment_iou(seg_start, seg_end, gs, ge))
+                    if max_iou >= iou_thresh:
+                        break
+                if max_iou < iou_thresh:
+                    neg_segments.append((seg_start, seg_end))
+                t += neg_stride
 
-        # ✅ 关键修改：不要在 query 的 dataset_infos 里放 cand_names
-        dataset_infos.append(
-            {
-                "file_path": fp,
-                "scene": info["scene"],
-                "gt_events": info["events"],
-                "label_name": gt_labels,   # ✅ eval.py 需要
-                "label_cand_id": -1,
-            }
-        )
+        # 负例采样上限（每个 query）
+        if neg_max_per_query > 0 and len(neg_segments) > neg_max_per_query:
+            neg_segments = neg_segments[:neg_max_per_query]
+
+        # 候选集合：所有 GT 片段 + 背景片段
+        cand_segments = gt_segments + neg_segments
+        cand_names = [_seg_id(fp, s, e) for s, e in cand_segments]
+        cand_audio_row = [{"path": abs_path, "start": s, "end": e, "bytes": None} for s, e in cand_segments]
+        cand_text_row = [cand_text_item[0]] * len(cand_segments)
+        cand_image_row = [None] * len(cand_segments)
+
+        for ev in gt_events:
+            query_audio.append({"path": abs_path, "bytes": None})
+            query_text.append(build_query_text("TUTSound", ev["label"]))
+            query_image.append([None])
+            cand_text.append(cand_text_row)
+            cand_image.append(cand_image_row)
+            cand_audio.append(cand_audio_row)
+
+            dataset_infos.append(
+                {
+                    "file_path": fp,
+                    "scene": info["scene"],
+                    "gt_events": gt_events,
+                    "query_event": ev,
+                    "cand_names": cand_names,
+                    "label_name": _seg_id(fp, float(ev["onset"]), float(ev["offset"])),
+                }
+            )
 
     dataset = datasets.Dataset.from_dict(
         {
@@ -165,7 +166,7 @@ def build_tutsound_audio_dataset(path_info: Tuple[str, str, str], **kwargs):
     )
 
     dataset = sample_dataset(dataset, **kwargs)
-    return dataset, corpus
+    return dataset, None
 
 
 DATASET_PARSER_NAME = "tutsound_audio_gnd"
@@ -179,4 +180,3 @@ def load_tutsound_audio_dataset(model_args, data_args, **kwargs):
         raise ValueError(f"Unknown dataset_name={dataset_name}")
 
     return build_tutsound_audio_dataset(path_info, **kwargs)
-

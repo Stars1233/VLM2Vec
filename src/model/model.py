@@ -4,14 +4,14 @@ import torch.distributed as dist
 from torch import nn, Tensor
 import torch.nn.functional as F
 import numpy as np
-from transformers import PreTrainedModel, AutoModelForCausalLM, AutoConfig
+from transformers import PreTrainedModel, AutoModel, AutoModelForCausalLM, AutoConfig
 from peft import LoraConfig, get_peft_model, PeftModel
 
 from src.arguments import ModelArguments, TrainingArguments
 from src.model.processor import (
     LLAVA_NEXT, QWEN2_VL, PHI3V, get_backbone_name, print_master, QWEN2_5_VL,
     backbone2model, QWEN2_VL_TOKENSELECTION, QWEN2_5_VL_TOKENSELECTION, E5_V,
-    INTERNVIDEO2, GME, VLM_IMAGE_TOKENS, LamRA, LamRA_QWEN2_5, COLPALI, QWEN2_5_OMNI
+    INTERNVIDEO2, GME, VLM_IMAGE_TOKENS, LamRA, LamRA_QWEN2_5, COLPALI, QWEN2_5_OMNI, NVOMNIEMBED
 )
 from src.model.baseline_backbone.colpali import ColPali
 from src.model.baseline_backbone.gme.gme_inference import GmeQwen2VL
@@ -326,6 +326,12 @@ class MMEBModel(nn.Module):
                 )
                 attn_mask = text_only_input.get("attention_mask", None)
 
+            if hasattr(outputs, "embeddings") and outputs.embeddings is not None:
+                emb = outputs.embeddings
+                if getattr(self, "normalize", False):
+                    emb = F.normalize(emb, p=2, dim=-1)
+                return emb
+
             hidden_states = outputs.hidden_states[-1] if getattr(outputs, "hidden_states", None) is not None else outputs.last_hidden_state
 
             if attn_mask is not None:
@@ -427,9 +433,12 @@ class MMEBModel(nn.Module):
                 use_dora=True,
                 inference_mode=False,
             )
-            lora_model = get_peft_model(base_model, lora_config)
+            if hasattr(base_model, "model") and base_model.model is not None:
+                base_model.model = get_peft_model(base_model.model, lora_config)
+            else:
+                base_model = get_peft_model(base_model, lora_config)
             model = cls(
-                encoder=lora_model,
+                encoder=base_model,
                 pooling=model_args.pooling,
                 normalize=model_args.normalize,
                 temperature=model_args.temperature,
@@ -446,7 +455,8 @@ class MMEBModel(nn.Module):
     @classmethod
     def load(cls, model_args: ModelArguments, is_trainable=True, **kwargs):
         model_name_or_path = model_args.checkpoint_path if model_args.checkpoint_path else model_args.model_name
-        config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
+        config_source = model_args.model_name if getattr(model_args, "lora", False) and model_args.checkpoint_path else model_name_or_path
+        config = AutoConfig.from_pretrained(config_source, trust_remote_code=True)
 
         if not hasattr(model_args, "model_backbone") or not model_args.model_backbone:
             model_backbone = get_backbone_name(hf_config=config, model_type=model_args.model_type)
@@ -466,6 +476,15 @@ class MMEBModel(nn.Module):
                 print_master(f"Warning: Could not set flash_attention_2 for {model_args.model_backbone}: {e}")
 
             base_model = backbone2model[model_args.model_backbone].from_pretrained(
+                model_args.model_name,
+                torch_dtype=torch.bfloat16,
+                low_cpu_mem_usage=True,
+                config=config,
+                trust_remote_code=True,
+            )
+        elif model_args.model_backbone == NVOMNIEMBED:
+            config = AutoConfig.from_pretrained(model_args.model_name, trust_remote_code=True)
+            base_model = AutoModel.from_pretrained(
                 model_args.model_name,
                 torch_dtype=torch.bfloat16,
                 low_cpu_mem_usage=True,
@@ -508,14 +527,25 @@ class MMEBModel(nn.Module):
         if model_args.lora:
             print_master(f"Loading LoRA from {model_name_or_path}")
             lora_config = LoraConfig.from_pretrained(model_name_or_path)
-            lora_model = PeftModel.from_pretrained(
-                base_model, model_name_or_path, config=lora_config, is_trainable=is_trainable
-            )
-            lora_model.load_adapter(model_name_or_path, lora_model.active_adapter, is_trainable=is_trainable)
-            if not is_trainable:
-                lora_model = lora_model.merge_and_unload()
+            if hasattr(base_model, "model") and base_model.model is not None:
+                lora_model = PeftModel.from_pretrained(
+                    base_model.model, model_name_or_path, config=lora_config, is_trainable=is_trainable
+                )
+                lora_model.load_adapter(model_name_or_path, lora_model.active_adapter, is_trainable=is_trainable)
+                if not is_trainable:
+                    lora_model = lora_model.merge_and_unload()
+                base_model.model = lora_model
+                encoder = base_model
+            else:
+                lora_model = PeftModel.from_pretrained(
+                    base_model, model_name_or_path, config=lora_config, is_trainable=is_trainable
+                )
+                lora_model.load_adapter(model_name_or_path, lora_model.active_adapter, is_trainable=is_trainable)
+                if not is_trainable:
+                    lora_model = lora_model.merge_and_unload()
+                encoder = lora_model
             model = cls(
-                encoder=lora_model,
+                encoder=encoder,
                 pooling=model_args.pooling,
                 normalize=model_args.normalize,
                 temperature=model_args.temperature,

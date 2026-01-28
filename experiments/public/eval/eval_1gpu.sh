@@ -14,8 +14,8 @@ echo ""
 CUDA_VISIBLE_DEVICES="0"
 BATCH_SIZE=16
 # BATCH_SIZE=8
-# MODALITIES=("image "video" "tool" "visdoc" "audio")
-MODALITIES=("text" "tool")
+# MODALITIES=("image" "video" "tool" "visdoc" "audio")
+MODALITIES=("audio")
 DATA_BASEDIR=/code/.cache/datasets/MMEB-v2_1
 OUTPUT_BASEDIR=exps/vlm2vec
 
@@ -25,8 +25,9 @@ OUTPUT_BASEDIR=exps/vlm2vec
 declare -a MODEL_SPECS
 # 选项1: 使用本地Qwen2-VL-2B + VLM2Vec-V2.0适配器（推荐，避免网络下载）
 # MODEL_SPECS+=( "/code/.cache/huggingface/Qwen2-VL-2B;qwen2_vl;$OUTPUT_BASEDIR/VLM2Vec-V2.0-Qwen2VL-2B;/code/.cache/huggingface/VLM2Vec-V2.0" )
+MODEL_SPECS+=( "/code/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/VLM2Vec-V3.0-Qwen2_5omni-3B;/code/OLM2VEC_and_MMEB-V3/VLM2Vec1/VLM2Vec/exps/output_model/Qwen2_5Omni_3B.audio.lora16.BS512.IB64.GCq8p8.NormTemp002.lr5e5.step5kwarm100/checkpoint-2850" )
 
-MODEL_SPECS+=( "/code/.cache/huggingface/omni-embed-nemotron-3b;qwen2_5_omni;$OUTPUT_BASEDIR/omni-embed-nemotron-3b" )
+# MODEL_SPECS+=( "/code/.cache/huggingface/omni-embed-nemotron-3b;nvomniembed;$OUTPUT_BASEDIR/omni-embed-nemotron-3b" )
 # MODEL_SPECS+=( "Alibaba-NLP/gme-Qwen2-VL-2B-Instruct;gme;$OUTPUT_BASEDIR/gme-Qwen2-VL-2B-Instruct" )
 # MODEL_SPECS+=( "Alibaba-NLP/gme-Qwen2-VL-7B-Instruct;gme;$OUTPUT_BASEDIR/gme-Qwen2-VL-7B-Instruct" )
 # MODEL_SPECS+=( "code-kunkun/LamRA-Ret;lamra;$OUTPUT_BASEDIR/LamRA-Ret" )
@@ -56,9 +57,9 @@ for spec in "${MODEL_SPECS[@]}"; do
 
     # Ensure the output directory exists
     mkdir -p "$OUTPUT_PATH"
-
+# --pooling eos
     cmd="CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES python eval.py \
-      --pooling eos \
+      --pooling mean \
       --normalize true \
       --per_device_eval_batch_size $BATCH_SIZE \
       --model_backbone \"$MODEL_BACKBONE\" \
@@ -66,9 +67,9 @@ for spec in "${MODEL_SPECS[@]}"; do
       --dataset_config \"$DATA_CONFIG_PATH\" \
       --encode_output_path \"$OUTPUT_PATH\" \
       --data_basedir \"$DATA_BASEDIR\" \
-      --dataloader_num_workers 8 \
-      --lora true"
-    # Add checkpoint_path if specified new added
+      --lora true \
+      --processor_name /code/.cache/huggingface/Qwen2.5-Omni-3B "
+    # Add checkpoint_path if specified new added --lora true
     if [ -n "$CHECKPOINT_PATH" ]; then
       cmd="$cmd --checkpoint_path \"$CHECKPOINT_PATH\""
     fi

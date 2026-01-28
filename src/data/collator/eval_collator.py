@@ -1,4 +1,5 @@
 import logging
+import os
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 from transformers import ProcessorMixin, AutoProcessor, AutoTokenizer
@@ -7,7 +8,18 @@ import torch
 from qwen_vl_utils import smart_resize
 from PIL import Image
 import torchaudio
-from src.model.processor import LLAVA_NEXT, QWEN2_VL, QWEN2_5_VL, PHI3V, QWEN2_VL_TOKENSELECTION, QWEN2_5_VL_TOKENSELECTION, process_vlm_inputs_fns
+from src.model.processor import (
+    LLAVA_NEXT,
+    QWEN2_VL,
+    QWEN2_5_VL,
+    PHI3V,
+    QWEN2_VL_TOKENSELECTION,
+    QWEN2_5_VL_TOKENSELECTION,
+    QWEN2_5_OMNI,
+    NVOMNIEMBED,
+    process_vlm_inputs_fns,
+)
+from src.data.collator.train_collator_omni import OmniAutoProcessorCollator
 
 from src.utils.basic_utils import print_rank, print_master
 import io
@@ -217,6 +229,18 @@ class MultimodalEvalDataCollator:
             elif visual_mode == "video":
                 for t, video_frames in zip(ex_text, ex_visual):
                     texts.append(t)
+                    # Downsample video frames to avoid excessive tokens/OOM.
+                    if isinstance(video_frames, list):
+                        sample_n_frames = int(self.data_args.video_max_frames or 8)
+                        if sample_n_frames > 0 and len(video_frames) > sample_n_frames:
+                            if sample_n_frames == 1:
+                                video_frames = [video_frames[0]]
+                            else:
+                                idxs = [
+                                    round(i * (len(video_frames) - 1) / (sample_n_frames - 1))
+                                    for i in range(sample_n_frames)
+                                ]
+                                video_frames = [video_frames[i] for i in idxs]
                     visuals.append(video_frames)  # List[PIL.Image]
                     audios.append(ex_audio)
 
@@ -242,13 +266,77 @@ class MultimodalEvalDataCollator:
             inputs["audios"] = audios
         return inputs
 
+    def _tensor_only(self, batch: Dict[str, Any]) -> Dict[str, torch.Tensor]:
+        return {k: v for k, v in batch.items() if isinstance(v, torch.Tensor)}
+
+    def _omni_process_batch(self, inputs: Dict[str, Any]) -> Dict[str, torch.Tensor]:
+        texts = inputs.get("text", [])
+        images = inputs.get("images", None)
+        videos = inputs.get("videos", None)
+        audios = inputs.get("audios", None)
+
+        if images is None:
+            images = [None] * len(texts)
+        if videos is None:
+            videos = [None] * len(texts)
+        if audios is None:
+            audios = [None] * len(texts)
+
+        max_len = int(getattr(self.data_args, "max_len", 256))
+        omni = OmniAutoProcessorCollator(
+            processor=self.processor,
+            data_args=self.data_args,
+            model_args=self.model_args,
+            training_args=None,
+        )
+
+        groups = {}
+        for i in range(len(texts)):
+            sig = (images[i] is not None, videos[i] is not None, audios[i] is not None)
+            groups.setdefault(sig, []).append(i)
+
+        outs = []
+        all_indices = []
+        for sig, sub in groups.items():
+            sub_text = [texts[i] for i in sub]
+            sub_img = [images[i] for i in sub]
+            sub_vid = [videos[i] for i in sub]
+            sub_aud = [audios[i] for i in sub]
+            out = omni._process_group(sub_text, sub_img, sub_vid, sub_aud, max_len)
+            outs.append(out)
+            all_indices.extend(sub)
+
+        merged = {}
+        for out in outs:
+            for k, v in out.items():
+                merged.setdefault(k, []).append(v)
+        final = {}
+        for k, chunks in merged.items():
+            if isinstance(chunks[0], torch.Tensor):
+                final[k] = torch.cat(chunks, dim=0)
+            else:
+                tmp = []
+                for c in chunks:
+                    tmp.extend(c)
+                final[k] = tmp
+
+        if all_indices:
+            inv = torch.empty(len(all_indices), dtype=torch.long)
+            for pos, idx in enumerate(all_indices):
+                inv[idx] = pos
+            for k, v in list(final.items()):
+                if isinstance(v, torch.Tensor) and v.size(0) == len(all_indices):
+                    final[k] = v.index_select(0, inv.to(v.device))
+
+        return self._tensor_only(final)
+
     def __call__(self, examples):
         """
         examples: dict with keys:
           - query_text/query_image/query_audio
           - cand_text/cand_image or cand_video/cand_audio
         """
-        process_fn = process_vlm_inputs_fns[self.model_args.model_backbone]
+        use_omni = self.model_args.model_backbone in {QWEN2_5_OMNI, NVOMNIEMBED}
 
         if self.encode_side == "qry":
             inputs = self._get_batch_inputs(
@@ -309,6 +397,8 @@ class MultimodalEvalDataCollator:
                 # 3) dict path/bytes (+ optional start/end)
                 if isinstance(audio_item, dict):
                     a_path = audio_item.get("path") or audio_item.get("audio_path") or audio_item.get("video_path")
+                    if a_path is not None and not os.path.isabs(a_path):
+                        a_path = os.path.join(self.data_args.data_basedir, a_path)
                     a_bytes = audio_item.get("bytes", None)
                     start_t = float(audio_item.get("start", 0.0))
                     end_t = audio_item.get("end", None)
@@ -336,6 +426,10 @@ class MultimodalEvalDataCollator:
             inputs["audios"] = audio_tensors
             inputs["audio_sample_rate"] = target_sr
 
-        processed_inputs = process_fn(inputs, processor=self.processor, max_length=self.data_args.max_len)
+        if use_omni:
+            processed_inputs = self._omni_process_batch(inputs)
+        else:
+            process_fn = process_vlm_inputs_fns[self.model_args.model_backbone]
+            processed_inputs = process_fn(inputs, processor=self.processor, max_length=self.data_args.max_len)
         dataset_infos = [e["dataset_infos"] for e in examples]
         return processed_inputs, dataset_infos

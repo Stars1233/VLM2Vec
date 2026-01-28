@@ -1,0 +1,4 @@
+ToolDe_train:
+    dataset_parser: toolDe
+    data_path: /code/.cache/datasets/MMEB-v2_1/tool-tasks/Tool-De-train
+    weight: 1
