@@ -14,10 +14,10 @@ class Qwen2_5OmniEmbeddingProcessor:
 
     def __call__(
         self,
-        text: str | None = None,
-        image: str | None = None,
-        video: str | None = None,
-        audio: str | None = None,
+        text=None,
+        images=None,
+        videos=None,
+        audio=None,
         *,
         fps: int | float | None = None,
         load_audio_from_video: bool = False,
@@ -25,13 +25,19 @@ class Qwen2_5OmniEmbeddingProcessor:
         return_tensors: str = "pt",
         **kwargs,
     ):
-        if text is None and image is None and video is None and audio is None:
+        # Support both single items (image/video) and batches (images/videos)
+        if images is None and 'image' in kwargs:
+            images = kwargs.pop('image')
+        if videos is None and 'video' in kwargs:
+            videos = kwargs.pop('video')
+
+        if text is None and images is None and videos is None and audio is None:
             raise ValueError("At least one modality must be provided.")
 
         return self.base(
             text=text,
-            images=image,
-            videos=video,
+            images=images,
+            videos=videos,
             audio=audio,
             return_tensors=return_tensors,
             **kwargs,

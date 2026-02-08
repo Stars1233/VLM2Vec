@@ -20,6 +20,7 @@ from src.model.processor import (
     process_vlm_inputs_fns,
 )
 from src.data.collator.train_collator_omni import OmniAutoProcessorCollator
+from src.data.collator.eval_collator_omni import OmniEvalAutoProcessorCollator
 
 from src.utils.basic_utils import print_rank, print_master
 import io
@@ -241,6 +242,12 @@ class MultimodalEvalDataCollator:
                                     for i in range(sample_n_frames)
                                 ]
                                 video_frames = [video_frames[i] for i in idxs]
+                        frame_size = getattr(self.data_args, "video_frame_size", None)
+                        if frame_size:
+                            video_frames = [
+                                (f.resize((frame_size, frame_size), resample=Image.BICUBIC) if f is not None else None)
+                                for f in video_frames
+                            ]
                     visuals.append(video_frames)  # List[PIL.Image]
                     audios.append(ex_audio)
 
@@ -270,65 +277,32 @@ class MultimodalEvalDataCollator:
         return {k: v for k, v in batch.items() if isinstance(v, torch.Tensor)}
 
     def _omni_process_batch(self, inputs: Dict[str, Any]) -> Dict[str, torch.Tensor]:
-        texts = inputs.get("text", [])
-        images = inputs.get("images", None)
-        videos = inputs.get("videos", None)
-        audios = inputs.get("audios", None)
+        """
+        Use Omni/NVOmni process fn directly with the inputs, since grouping is now handled in processor.py
+        """
+        # Validate inputs before processing
+        if not inputs.get("text"):
+            # Fallback for empty batch
+            return {"input_ids": torch.empty(0, 0, dtype=torch.long),
+                   "attention_mask": torch.empty(0, 0, dtype=torch.long)}
 
-        if images is None:
-            images = [None] * len(texts)
-        if videos is None:
-            videos = [None] * len(texts)
-        if audios is None:
-            audios = [None] * len(texts)
-
-        max_len = int(getattr(self.data_args, "max_len", 256))
-        omni = OmniAutoProcessorCollator(
-            processor=self.processor,
-            data_args=self.data_args,
-            model_args=self.model_args,
-            training_args=None,
-        )
-
-        groups = {}
-        for i in range(len(texts)):
-            sig = (images[i] is not None, videos[i] is not None, audios[i] is not None)
-            groups.setdefault(sig, []).append(i)
-
-        outs = []
-        all_indices = []
-        for sig, sub in groups.items():
-            sub_text = [texts[i] for i in sub]
-            sub_img = [images[i] for i in sub]
-            sub_vid = [videos[i] for i in sub]
-            sub_aud = [audios[i] for i in sub]
-            out = omni._process_group(sub_text, sub_img, sub_vid, sub_aud, max_len)
-            outs.append(out)
-            all_indices.extend(sub)
-
-        merged = {}
-        for out in outs:
-            for k, v in out.items():
-                merged.setdefault(k, []).append(v)
-        final = {}
-        for k, chunks in merged.items():
-            if isinstance(chunks[0], torch.Tensor):
-                final[k] = torch.cat(chunks, dim=0)
-            else:
-                tmp = []
-                for c in chunks:
-                    tmp.extend(c)
-                final[k] = tmp
-
-        if all_indices:
-            inv = torch.empty(len(all_indices), dtype=torch.long)
-            for pos, idx in enumerate(all_indices):
-                inv[idx] = pos
-            for k, v in list(final.items()):
-                if isinstance(v, torch.Tensor) and v.size(0) == len(all_indices):
-                    final[k] = v.index_select(0, inv.to(v.device))
-
-        return self._tensor_only(final)
+        try:
+            # Call the processor directly (grouping is handled inside processor now)
+            from src.model.processor import Omni_process_fn, NVOmni_process_fn, NVOMNIEMBED
+            process_fn = NVOmni_process_fn if self.model_args.model_backbone == NVOMNIEMBED else Omni_process_fn
+            outputs = process_fn(
+                model_inputs=inputs,
+                processor=self.processor,
+                max_length=self.data_args.max_len
+            )
+            return self._tensor_only(outputs)
+        except Exception as e:
+            print(f"Error in _omni_process_batch: {e}")
+            print(f"Inputs keys: {list(inputs.keys())}")
+            print(f"Text length: {len(inputs.get('text', []))}")
+            print(f"Images length: {len(inputs.get('images', [])) if inputs.get('images') else 'None'}")
+            print(f"Audios length: {len(inputs.get('audios', [])) if inputs.get('audios') else 'None'}")
+            raise
 
     def __call__(self, examples):
         """
@@ -368,6 +342,41 @@ class MultimodalEvalDataCollator:
         # ===== 音频读取/裁剪（保留你原来的逻辑）=====
         if "audios" in inputs:
             target_sr = getattr(self.data_args, "audio_sample_rate", 16000) or 16000
+            min_audio_samples = getattr(self.data_args, "audio_min_samples", None)
+            if min_audio_samples is None:
+                min_audio_samples = int(target_sr * 0.025)  # 25ms
+
+            max_audio_seconds = getattr(self.data_args, "audio_max_seconds", None)
+            if max_audio_seconds is not None:
+                max_audio_samples = int(float(max_audio_seconds) * target_sr)
+            else:
+                max_audio_samples = getattr(self.data_args, "audio_max_samples", None)
+                if max_audio_samples is None:
+                    max_audio_frames = int(getattr(self.data_args, "audio_max_frames", 1024))
+                    max_audio_samples = max_audio_frames * 160
+                else:
+                    max_audio_samples = int(max_audio_samples)
+
+            eval_crop = getattr(self.data_args, "eval_crop", "head")
+
+            def _crop_audio(wav: torch.Tensor) -> torch.Tensor | None:
+                if wav is None:
+                    return None
+                if wav.numel() < min_audio_samples:
+                    return None
+                if wav.numel() > max_audio_samples:
+                    if eval_crop == "head":
+                        wav = wav[:max_audio_samples]
+                    elif eval_crop == "center":
+                        start = (wav.numel() - max_audio_samples) // 2
+                        wav = wav[start:start + max_audio_samples]
+                    elif eval_crop == "multi_crop":
+                        start = (wav.numel() - max_audio_samples) // 2
+                        wav = wav[start:start + max_audio_samples]
+                    else:
+                        wav = wav[:max_audio_samples]
+                return wav
+
             audio_tensors = []
             for audio_item in inputs["audios"]:
                 if audio_item is None:
@@ -383,7 +392,7 @@ class MultimodalEvalDataCollator:
                         wav = wav.mean(0)
                     if sr != target_sr:
                         wav = torchaudio.functional.resample(wav, sr, target_sr)
-                    audio_tensors.append(wav)
+                    audio_tensors.append(_crop_audio(wav))
                     continue
 
                 # 2) Tensor waveform
@@ -391,7 +400,7 @@ class MultimodalEvalDataCollator:
                     wav = audio_item.float()
                     if wav.ndim > 1:
                         wav = wav.mean(0)
-                    audio_tensors.append(wav)
+                    audio_tensors.append(_crop_audio(wav))
                     continue
 
                 # 3) dict path/bytes (+ optional start/end)
@@ -418,7 +427,7 @@ class MultimodalEvalDataCollator:
                         wave = wave.mean(0)
                     if sr != target_sr:
                         wave = torchaudio.functional.resample(wave, sr, target_sr)
-                    audio_tensors.append(wave)
+                    audio_tensors.append(_crop_audio(wave))
                     continue
 
                 raise ValueError(f"Unsupported audio item type: {type(audio_item)}")

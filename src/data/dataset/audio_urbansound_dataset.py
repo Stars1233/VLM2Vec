@@ -7,10 +7,19 @@ import os
 from typing import Any, Dict, List, Tuple
 
 import datasets
+import torchaudio
 
 from src.data.eval_dataset.audio_instruction_utils import build_query_text
 from src.utils.dataset_utils import sample_dataset
 from src.data.dataset.base_pair_dataset import AutoPairDataset
+
+
+def _is_valid_audio_path(path: str) -> bool:
+    try:
+        info = torchaudio.info(path)
+        return info.num_frames > 0 and info.sample_rate > 0
+    except Exception:
+        return False
 
 
 def _resolve_split_csv(split: str) -> str:
@@ -93,6 +102,8 @@ def load_audio_urbansound8k_dataset(*args: Any, **kwargs: Any):
     for row in dataset:
         audio_path = row.get("path") or row.get("audio_path")
         if not audio_path or not os.path.isfile(audio_path):
+            continue
+        if not _is_valid_audio_path(audio_path):
             continue
         label_name = (
             row.get("class")

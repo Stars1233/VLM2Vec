@@ -49,7 +49,17 @@ class DataArguments:
     image_decay_factor: float = field(default=None, metadata={"help": "The image decay factor for resizing temporal images"})
     num_hardneg: int = field(default=0, metadata={"help": "hard negative number"})
     video_max_frames: int = field(default=4, metadata={"help": "Max video frames per sample in training"})
-    video_frame_size: int = field(default=224, metadata={"help": "Square frame size for video frames (pixels)"})
+    video_frame_size: int = field(default=168, metadata={"help": "Square frame size for video frames (pixels)"})
+
+    # Audio configuration (unified for train/eval)
+    audio_sample_rate: int = field(default=16000, metadata={"help": "Audio sample rate for resampling"})
+    audio_max_seconds: float = field(default=None, metadata={"help": "Maximum audio duration in seconds. If set, takes precedence over audio_max_samples"})
+    audio_max_samples: int = field(default=None, metadata={"help": "Maximum audio samples. Used if audio_max_seconds is not set"})
+    audio_min_samples: int = field(default=None, metadata={"help": "Minimum audio samples to keep (shorter audios are discarded)"})
+
+    # Audio cropping strategies
+    train_crop: str = field(default="random", metadata={"help": "Audio cropping strategy for training: 'random'"})
+    eval_crop: str = field(default="head", metadata={"help": "Audio cropping strategy for evaluation: 'head', 'center', or 'multi_crop'"})
 
 
 @dataclass

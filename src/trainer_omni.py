@@ -336,7 +336,7 @@ class OmniEmbedder(nn.Module):
             if isinstance(v, torch.Tensor):
                 inputs[k] = v.to(dev)
 
-        if not hasattr(self, "_debug_fwd_once"):
+        if not hasattr(self, "_debug_fwd_once") and os.environ.get("VLM2VEC_DEBUG"):
             self._debug_fwd_once = True
             devs = {k: (v.device if isinstance(v, torch.Tensor) else type(v)) for k, v in inputs.items()}
             shapes = {k: (tuple(v.shape) if isinstance(v, torch.Tensor) else None) for k, v in inputs.items()}
@@ -468,10 +468,41 @@ class OmniEmbedTrainer(Trainer):
             if q_reps is None or p_reps is None:
                 loss = torch.tensor(0.0, device=next(real_model.parameters()).device)
             else:
-                all_q = ddp_all_gather_variable(q_reps)
-                all_p = ddp_all_gather_variable(p_reps)
                 temperature = getattr(real_model, "temperature", 0.02)
-                loss = info_nce_loss(all_q, all_p, temperature)
+                if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
+                    # Gather global negatives; keep only local reps with grad, detach remote reps.
+                    world = dist.get_world_size()
+                    rank = dist.get_rank()
+                    device = q_reps.device
+                    local_b = torch.tensor([q_reps.size(0)], device=device, dtype=torch.long)
+                    sizes = [torch.zeros_like(local_b) for _ in range(world)]
+                    dist.all_gather(sizes, local_b)
+                    sizes = [int(s.item()) for s in sizes]
+                    max_b = max(sizes)
+
+                    if p_reps.size(0) < max_b:
+                        pad = torch.zeros((max_b - p_reps.size(0), p_reps.size(1)), device=device, dtype=p_reps.dtype)
+                        p_pad = torch.cat([p_reps, pad], dim=0)
+                    else:
+                        p_pad = p_reps
+
+                    gathered = [torch.empty_like(p_pad) for _ in range(world)]
+                    dist.all_gather(gathered, p_pad)
+
+                    parts = []
+                    for r, (g, b) in enumerate(zip(gathered, sizes)):
+                        if r == rank:
+                            parts.append(p_reps)
+                        else:
+                            parts.append(g[:b].detach())
+                    all_p = torch.cat(parts, dim=0)
+
+                    offset = sum(sizes[:rank])
+                    target = torch.arange(q_reps.size(0), device=device) + offset
+                    scores = q_reps @ all_p.t()
+                    loss = F.cross_entropy(scores / float(temperature), target)
+                else:
+                    loss = info_nce_loss(q_reps, p_reps, temperature)
         if not hasattr(self, "_debug_loss_once"):
             self._debug_loss_once = True
             q_ids = qry_batch.get("input_ids")

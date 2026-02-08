@@ -10,13 +10,12 @@ from PIL import Image
 from transformers import ProcessorMixin
 
 @dataclass
-class OmniAutoProcessorCollator:
+class OmniEvalAutoProcessorCollator:
     processor: ProcessorMixin
     data_args: Any
     model_args: Any
     training_args: Any
     batch_size: Optional[int] = None
-    _printed_proc_info: bool = False
 
     # ---------- helpers ----------
     def _clean_image_list(self, imgs):
@@ -45,14 +44,6 @@ class OmniAutoProcessorCollator:
                 return None, visual
             return [visual[0]], None
         return [visual], None
-
-    def _random_window(self, items, max_frames: int):
-        if items is None or not isinstance(items, list):
-            return items
-        if max_frames <= 0 or len(items) <= max_frames:
-            return items
-        start = random.randint(0, len(items) - max_frames)
-        return items[start : start + max_frames]
 
     def _load_image_from_dict(self, raw_images: dict, example: dict):
         """
@@ -89,14 +80,16 @@ class OmniAutoProcessorCollator:
 
         return self._clean_image_list(visual)
 
-    def _load_audio_batch(self, audio_items: List[Any]) -> Tuple[List[Optional[torch.Tensor]], int]:
-        # Unified audio config: use same fields as eval
+    def _load_audio_batch_eval(self, audio_items: List[Any]) -> Tuple[List[Optional[torch.Tensor]], int]:
+        """
+        Eval version: deterministic audio loading and cropping
+        """
         target_sr = int(getattr(self.data_args, "audio_sample_rate", 16000) or 16000)
         min_audio_samples = getattr(self.data_args, "audio_min_samples", None)
         if min_audio_samples is None:
             min_audio_samples = int(target_sr * 0.025)  # 25ms
 
-        # Unified max audio length: audio_max_seconds takes precedence over audio_max_samples
+        # Unified audio config: same as train collator
         max_audio_seconds = getattr(self.data_args, "audio_max_seconds", None)
         if max_audio_seconds is not None:
             max_audio_samples = int(float(max_audio_seconds) * target_sr)
@@ -106,6 +99,9 @@ class OmniAutoProcessorCollator:
                 # Fallback to legacy config for compatibility
                 max_audio_frames = int(getattr(self.data_args, "audio_max_frames", 1024))
                 max_audio_samples = max_audio_frames * 160
+
+        # Eval crop strategy: head/center/multi_crop (deterministic)
+        eval_crop = getattr(self.data_args, "eval_crop", "head")
 
         out = []
         for item in audio_items:
@@ -125,8 +121,20 @@ class OmniAutoProcessorCollator:
                     out.append(None)
                     continue
                 if wav.numel() > max_audio_samples:
-                    start = random.randint(0, wav.numel() - max_audio_samples)
-                    wav = wav[start : start + max_audio_samples]
+                    # Eval deterministic cropping
+                    if eval_crop == "head":
+                        wav = wav[:max_audio_samples]
+                    elif eval_crop == "center":
+                        start = (wav.numel() - max_audio_samples) // 2
+                        wav = wav[start:start + max_audio_samples]
+                    elif eval_crop == "multi_crop":
+                        # For multi_crop, we could return multiple crops
+                        # For simplicity, use center crop as default
+                        start = (wav.numel() - max_audio_samples) // 2
+                        wav = wav[start:start + max_audio_samples]
+                    else:
+                        # Default to head
+                        wav = wav[:max_audio_samples]
                 out.append(wav)
                 continue
 
@@ -139,8 +147,17 @@ class OmniAutoProcessorCollator:
                     out.append(None)
                     continue
                 if wav.numel() > max_audio_samples:
-                    start = random.randint(0, wav.numel() - max_audio_samples)
-                    wav = wav[start : start + max_audio_samples]
+                    # Eval deterministic cropping
+                    if eval_crop == "head":
+                        wav = wav[:max_audio_samples]
+                    elif eval_crop == "center":
+                        start = (wav.numel() - max_audio_samples) // 2
+                        wav = wav[start:start + max_audio_samples]
+                    elif eval_crop == "multi_crop":
+                        start = (wav.numel() - max_audio_samples) // 2
+                        wav = wav[start:start + max_audio_samples]
+                    else:
+                        wav = wav[:max_audio_samples]
                 out.append(wav)
                 continue
 
@@ -175,8 +192,17 @@ class OmniAutoProcessorCollator:
                 if sr != target_sr:
                     wave = torchaudio.functional.resample(wave, sr, target_sr)
                 if wave.numel() > max_audio_samples:
-                    start = random.randint(0, wave.numel() - max_audio_samples)
-                    wave = wave[start : start + max_audio_samples]
+                    # Eval deterministic cropping
+                    if eval_crop == "head":
+                        wave = wave[:max_audio_samples]
+                    elif eval_crop == "center":
+                        start = (wave.numel() - max_audio_samples) // 2
+                        wave = wave[start:start + max_audio_samples]
+                    elif eval_crop == "multi_crop":
+                        start = (wave.numel() - max_audio_samples) // 2
+                        wave = wave[start:start + max_audio_samples]
+                    else:
+                        wave = wave[:max_audio_samples]
                 out.append(wave)
                 continue
 
@@ -184,7 +210,18 @@ class OmniAutoProcessorCollator:
 
         return out, target_sr
 
-    def _extract_raw(self, examples: List[dict], text_key: str, image_key: str, audio_key: Optional[str]):
+    def _random_window(self, items, max_frames: int):
+        if items is None or not isinstance(items, list):
+            return items
+        if max_frames <= 0 or len(items) <= max_frames:
+            return items
+        start = random.randint(0, len(items) - max_frames)
+        return items[start : start + max_frames]
+
+    def _extract_raw_eval(self, examples: List[dict], text_key: str, image_key: str, audio_key: Optional[str]):
+        """
+        Extract raw data for eval, similar to train version but adapted for eval datasets
+        """
         texts, images, audios = [], [], []
         for ex in examples:
             if ex is None or not ex:
@@ -219,13 +256,16 @@ class OmniAutoProcessorCollator:
 
         return texts, images, audios
 
-    def _sig(self, img, vid, has_audio: bool):
-        has_a = bool(has_audio)
+    def _sig(self, img, vid, aud):
+        has_a = aud is not None
         has_i = img is not None
         has_v = vid is not None
         return (has_i, has_v, has_a)
 
-    def _process_group(self, texts, images, videos, audios, max_length: int):
+    def _process_group_eval(self, texts, images, videos, audios, max_length: int):
+        """
+        Process a group of examples with same modality signature for eval
+        """
         kwargs = dict(
             text=texts,
             text_kwargs={
@@ -236,25 +276,20 @@ class OmniAutoProcessorCollator:
         )
         if max_length is not None:
             kwargs["text_kwargs"]["max_length"] = max_length
-
         has_images = any(im is not None for im in images)
         has_videos = any(v is not None for v in videos)
-        has_audios = any(a is not None for a in audios)
-
         if has_images and has_videos:
-            raise ValueError("OmniAutoProcessorCollator: cannot mix images and videos in the same group.")
-
+            raise ValueError("OmniEvalAutoProcessorCollator: cannot mix images and videos in the same group.")
         if has_images:
             kwargs["images"] = images
         if has_videos:
             kwargs["videos"] = videos
         audio_present = None
-        if has_audios:
-            # Build per-sample audio list, keep batch aligned; missing audio -> dummy zeros.
+        if any(a is not None for a in audios):
             audio_present = []
             audio_np = []
-            audio_invalid = False
             dummy_len = 1
+            audio_invalid = False
             for a in audios:
                 if isinstance(a, torch.Tensor) and a.numel() > 0:
                     if a.dim() > 1:
@@ -263,46 +298,20 @@ class OmniAutoProcessorCollator:
                         audio_present.append(True)
                         audio_np.append(a.detach().cpu().numpy().astype(np.float32, copy=False))
                         continue
-                    if os.environ.get("VLM2VEC_DEBUG"):
-                        print(f"[DEBUG] Invalid audio tensor shape: {a.shape}")
                     audio_invalid = True
                     break
                 elif a is None:
                     audio_present.append(False)
                     audio_np.append(np.zeros((dummy_len,), dtype=np.float32))
                 else:
-                    if os.environ.get("VLM2VEC_DEBUG"):
-                        print(f"[DEBUG] Invalid audio tensor: {type(a)}")
                     audio_invalid = True
                     break
             if not audio_invalid and len(audio_np) == len(texts):
                 kwargs["audio"] = audio_np
-                target_sr = int(getattr(self.data_args, "audio_sample_rate", 16000) or 16000)
-                kwargs["audio_kwargs"] = {"sampling_rate": target_sr}
-                if os.environ.get("VLM2VEC_DEBUG"):
-                    print(f"[DEBUG] Passing {len(audio_np)} audios to processor (dummy for missing)")
             else:
-                if os.environ.get("VLM2VEC_DEBUG"):
-                    print("[DEBUG] Audio invalid or count mismatch, skipping audio processing")
-                has_audios = False
+                audio_present = None
 
-        # Audio parameters are only passed when has_audios is True and all audios are valid
-        if "audio" in kwargs:
-            assert isinstance(kwargs["audio"], list)
-            assert len(kwargs["audio"]) == len(kwargs["text"])
-            assert all(isinstance(a, np.ndarray) and a.ndim == 1 for a in kwargs["audio"])
-            assert all(a.dtype in (np.float32, np.float64) for a in kwargs["audio"])
-
-        base_processor = getattr(self.processor, "base", self.processor)
-        if not self._printed_proc_info and os.environ.get("VLM2VEC_DEBUG"):
-            print("PROC TYPE:", type(base_processor))
-            print("KWARGS KEYS:", sorted(list(kwargs.keys())))
-            for attr in ["tokenizer", "image_processor", "feature_extractor", "audio_processor", "base"]:
-                print(attr, hasattr(base_processor, attr))
-            self._printed_proc_info = True
-        outputs = base_processor(**kwargs)
-
-        # If we injected dummy audio, zero out features & masks for missing samples.
+        outputs = self.processor(**kwargs)
         if audio_present is not None and "input_features" in outputs:
             missing = torch.tensor([not x for x in audio_present], dtype=torch.bool)
             if missing.any():
@@ -312,114 +321,75 @@ class OmniAutoProcessorCollator:
                     outputs["feature_attention_mask"][missing] = 0
         return outputs
 
-    def _tensor_only(self, batch: Dict[str, Any]) -> Dict[str, torch.Tensor]:
-        return {k: v for k, v in batch.items() if isinstance(v, torch.Tensor)}
-
-    def _should_use_chat_template(self) -> bool:
-        try:
-            from src.model.processor import QWEN2_5_OMNI, NVOMNIEMBED
-        except Exception:
-            return False
-        backbone = getattr(self.model_args, "model_backbone", None)
-        if backbone not in {QWEN2_5_OMNI, NVOMNIEMBED}:
-            return False
-        # Only enable if processor exposes apply_chat_template
-        if hasattr(self.processor, "apply_chat_template"):
-            return True
-        if hasattr(self.processor, "tokenizer") and hasattr(self.processor.tokenizer, "apply_chat_template"):
-            return True
-        return False
-
-    def _process_group_chat_template(self, texts, images, videos, audios, max_length: int):
-        """
-        Align with Nemotron eval: apply_chat_template + process_mm_info.
-        Uses NVOmni_process_fn which wraps both behaviors.
-        """
-        from src.model.processor import NVOmni_process_fn
-
-        inputs = {"text": texts}
-        if images is not None and any(im is not None for im in images):
-            inputs["images"] = images
-        if videos is not None and any(v is not None for v in videos):
-            inputs["videos"] = videos
-        if audios is not None and any(a is not None for a in audios):
-            inputs["audios"] = audios
-            inputs["audio_sample_rate"] = int(getattr(self.data_args, "audio_sample_rate", 16000) or 16000)
-
-        outputs = NVOmni_process_fn(
-            model_inputs=inputs,
-            processor=self.processor,
-            max_length=max_length,
-        )
-        return self._tensor_only(outputs)
-
-    # ---------- main ----------
     def __call__(self, examples: List[dict]):
+        """
+        Eval collator with modality grouping to avoid mixed-modality batch constraints
+        """
         # fixed batch size check
         if self.batch_size is not None and len(examples) < self.batch_size:
             raise RuntimeError(f"Expect batch size {self.batch_size}, but got {len(examples)}")
 
-        # raw
-        q_texts, q_imgs_raw, q_auds = self._extract_raw(examples, "query_text", "query_image", "query_audio")
-        p_texts, p_imgs_raw, p_auds = self._extract_raw(examples, "pos_text", "pos_image", "pos_audio")
+        # Extract data based on eval dataset schema
+        # Support both query/cand and direct text/image/audio formats
+        if "query_text" in examples[0]:
+            # Query-candidate format (retrieval tasks)
+            q_texts, q_imgs_raw, q_auds = self._extract_raw_eval(examples, "query_text", "query_image", "query_audio")
+            c_texts, c_imgs_raw, c_auds = self._extract_raw_eval(examples, "cand_text", "cand_image", "cand_audio")
+        else:
+            # Direct format (classification/other tasks)
+            q_texts, q_imgs_raw, q_auds = self._extract_raw_eval(examples, "text", "image", "audio")
+            c_texts, c_imgs_raw, c_auds = [], [], []  # No candidates
 
-        # decode audio tensors only for those that exist (avoid dummy audio)
-        q_wavs, q_sr = self._load_audio_batch(q_auds)
-        p_wavs, p_sr = self._load_audio_batch(p_auds)
-        if os.environ.get("VLM2VEC_DEBUG"):
-            print(f"[DEBUG] q_audio batch len={len(q_wavs)} shapes/numel={[None if w is None else (tuple(w.shape), int(w.numel())) for w in q_wavs]}")
-            print(f"[DEBUG] p_audio batch len={len(p_wavs)} shapes/numel={[None if w is None else (tuple(w.shape), int(w.numel())) for w in p_wavs]}")
+        # Load audio with eval strategy (deterministic)
+        q_wavs, q_sr = self._load_audio_batch_eval(q_auds)
+        if c_auds:
+            c_wavs, c_sr = self._load_audio_batch_eval(c_auds)
+        else:
+            c_wavs, c_sr = [], q_sr
 
+        # Split visuals
         q_imgs, q_vids = [], []
-        p_imgs, p_vids = [], []
-        for qi, pi in zip(q_imgs_raw, p_imgs_raw):
+        c_imgs, c_vids = [], []
+        for qi, ci in zip(q_imgs_raw, c_imgs_raw or [None] * len(q_imgs_raw)):
             q_img, q_vid = self._split_visual(qi)
-            p_img, p_vid = self._split_visual(pi)
+            c_img, c_vid = self._split_visual(ci) if ci is not None else (None, None)
             q_imgs.append(q_img)
             q_vids.append(q_vid)
-            p_imgs.append(p_img)
-            p_vids.append(p_vid)
+            c_imgs.append(c_img)
+            c_vids.append(c_vid)
 
-        # valid mask: any sample with audio specified but failed to load -> invalid
+        # Validate audio loading
         valid = []
-        for qa, qw, pa, pw in zip(q_auds, q_wavs, p_auds, p_wavs):
+        for i, (qa, qw) in enumerate(zip(q_auds, q_wavs)):
             ok = True
             if qa is not None and qw is None:
                 ok = False
-            if pa is not None and pw is None:
-                ok = False
+            # For retrieval tasks, also check candidates
+            if c_auds and i < len(c_auds):
+                ca, cw = c_auds[i], c_wavs[i]
+                if ca is not None and cw is None:
+                    ok = False
             valid.append(ok)
 
-        # replace invalid samples with pure text dummy (keeps batch size stable)
+        # Replace invalid samples with pure text dummy
         for i, ok in enumerate(valid):
             if not ok:
-                q_texts[i], p_texts[i] = " ", " "
-                q_imgs[i], p_imgs[i] = None, None
-                q_vids[i], p_vids[i] = None, None
-                q_wavs[i], p_wavs[i] = None, None
+                q_texts[i], c_texts[i] = " ", " "
+                q_imgs[i], c_imgs[i] = None, None
+                q_vids[i], c_vids[i] = None, None
+                q_wavs[i], c_wavs[i] = None, None
 
-        # group by modality signature to keep processor assumptions clean
-        # Re-group after invalid sample replacement to ensure consistent signatures
+        # Group by modality signature to keep processor assumptions clean
         idxs = list(range(len(examples)))
         groups = {}
         for i in idxs:
-            # Only consider samples with valid modalities; group by has_audio to avoid mixed audio in-group
-            q_has_audio = q_wavs[i] is not None
-            p_has_audio = p_wavs[i] is not None
-            q_sig = self._sig(q_imgs[i], q_vids[i], q_has_audio)
-            p_sig = self._sig(p_imgs[i], p_vids[i], p_has_audio)
-            s = (q_sig, p_sig)
-            groups.setdefault(s, []).append(i)
+            q_sig = self._sig(q_imgs[i], q_vids[i], q_wavs[i])
+            c_sig = self._sig(c_imgs[i], c_vids[i], c_wavs[i]) if c_imgs else (False, False, False)
+            groups.setdefault((q_sig, c_sig), []).append(i)
 
         max_len = int(getattr(self.data_args, "max_len", 256))
-        use_chat_template = self._should_use_chat_template()
-        if use_chat_template and not getattr(self, "_printed_chat_template_info", False):
-            print("[INFO] OmniAutoProcessorCollator: using apply_chat_template + process_mm_info (Nemotron-style)")
-            self._printed_chat_template_info = True
 
         def _merge(out_list: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
-            # out_list already per-group; we need reconstruct per-example order.
-            # We'll build dict of lists then stack/pad is already done by processor.
             # Ensure missing batch-first keys are filled so batch dims align.
             batch_first_keys = {
                 "input_ids",
@@ -438,7 +408,6 @@ class OmniAutoProcessorCollator:
                         key_refs.setdefault(k, v)
             if key_refs:
                 for out in out_list:
-                    # infer batch size from any tensor in this out
                     bsz = None
                     for v in out.values():
                         if isinstance(v, torch.Tensor):
@@ -457,7 +426,6 @@ class OmniAutoProcessorCollator:
             for out in out_list:
                 for k, v in out.items():
                     merged.setdefault(k, []).append(v)
-            # concatenate along batch dim
             final = {}
             debug_merge = os.environ.get("VLM2VEC_DEBUG_MERGE_SHAPES", "").lower()
             for k, chunks in merged.items():
@@ -468,7 +436,6 @@ class OmniAutoProcessorCollator:
                             print(f"[DEBUG][merge] key={k} shapes={shapes}")
                     final[k] = torch.cat(chunks, dim=0)
                 else:
-                    # e.g. lists (rare from processor), keep concatenation
                     if debug_merge:
                         lens = [len(c) for c in chunks]
                         if len(set(lens)) != 1:
@@ -479,9 +446,9 @@ class OmniAutoProcessorCollator:
                     final[k] = tmp
             return final
 
-        # process qry/pos in matching grouping to preserve alignment
+        # Process qry/pos in matching grouping to preserve alignment
         qry_outs = []
-        pos_outs = []
+        cand_outs = []
         order_chunks = []
 
         for s, sub in groups.items():
@@ -491,32 +458,42 @@ class OmniAutoProcessorCollator:
             sub_q_vid  = [q_vids[i] for i in sub]
             sub_q_wav  = [q_wavs[i] for i in sub]
 
-            sub_p_text = [p_texts[i] for i in sub]
-            sub_p_img  = [p_imgs[i] for i in sub]
-            sub_p_vid  = [p_vids[i] for i in sub]
-            sub_p_wav  = [p_wavs[i] for i in sub]
+            if c_texts:
+                sub_c_text = [c_texts[i] for i in sub]
+                sub_c_img  = [c_imgs[i] for i in sub]
+                sub_c_vid  = [c_vids[i] for i in sub]
+                sub_c_wav  = [c_wavs[i] for i in sub]
 
-            if use_chat_template:
-                q_proc = self._process_group_chat_template(sub_q_text, sub_q_img, sub_q_vid, sub_q_wav, max_len)
-                p_proc = self._process_group_chat_template(sub_p_text, sub_p_img, sub_p_vid, sub_p_wav, max_len)
+            q_proc = self._process_group_eval(sub_q_text, sub_q_img, sub_q_vid, sub_q_wav, max_len)
+            if c_texts:
+                c_proc = self._process_group_eval(sub_c_text, sub_c_img, sub_c_vid, sub_c_wav, max_len)
             else:
-                q_proc = self._process_group(sub_q_text, sub_q_img, sub_q_vid, sub_q_wav, max_len)
-                p_proc = self._process_group(sub_p_text, sub_p_img, sub_p_vid, sub_p_wav, max_len)
+                c_proc = None
 
             qry_outs.append(q_proc)
-            pos_outs.append(p_proc)
+            if c_proc:
+                cand_outs.append(c_proc)
             order_chunks.append(sub)
 
         # merge
         qry_batch = _merge(qry_outs)
-        pos_batch = _merge(pos_outs)
+        if cand_outs:
+            cand_batch = _merge(cand_outs)
+        else:
+            cand_batch = {}
 
         # attach metadata
         qry_batch["valid_example_mask"] = torch.tensor(valid, dtype=torch.bool)
-        pos_batch["valid_example_mask"] = torch.tensor(valid, dtype=torch.bool)
+        if cand_batch:
+            cand_batch["valid_example_mask"] = torch.tensor(valid, dtype=torch.bool)
 
         # for debug / hash you can still attach raw texts if you want
         qry_batch["text"] = q_texts
-        pos_batch["text"] = p_texts
+        if c_texts:
+            cand_batch["text"] = c_texts
 
-        return qry_batch, pos_batch
+        # Return format depends on whether we have candidates
+        if cand_batch:
+            return qry_batch, cand_batch
+        else:
+            return qry_batch

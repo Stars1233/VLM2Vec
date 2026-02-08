@@ -69,7 +69,7 @@ def build_tutsound_audio_dataset(*args: Any, **kwargs: Any):
     if not dataset_path:
         raise ValueError("TUTSound: data_path is required")
     base_dir = os.path.join(dataset_path, "TUT-sound-events-2017-development")
-    
+
     # 负例生成参数（可选）
     neg_win_len = float(kwargs.get("neg_win_len", 1.0))
     neg_stride = float(kwargs.get("neg_stride", 0.5))
@@ -126,6 +126,9 @@ def build_tutsound_audio_dataset(*args: Any, **kwargs: Any):
 
         try:
             audio_info = torchaudio.info(abs_path)
+            if audio_info.num_frames <= 0 or audio_info.sample_rate <= 0:
+                print(f"Warning: Invalid audio info for {abs_path}: {audio_info}")
+                continue
         except Exception as e:
             print(f"Warning: Failed to read audio info for {abs_path}: {e}")
             continue

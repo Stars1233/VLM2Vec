@@ -228,13 +228,37 @@ def encode_embeddings(
     if dist.is_initialized() and full_dataset.num_rows >= world_size:
         print_master(f"Gathering {encode_side} embeddings across all ranks...")
 
-        # Use the more efficient all_gather_into_tensor for tensors
-        output_shape = list(embeds_tensor.shape)
-        output_shape[0] = full_dataset.num_rows
+        # all_gather_into_tensor requires each rank input to have the same shape.
+        # Pad along the batch dimension to the max local count, then trim by counts.
         embeds_tensor = embeds_tensor.to(training_args.device)
+        local_count = torch.tensor([embeds_tensor.shape[0]], device=training_args.device, dtype=torch.int64)
+        all_counts = [torch.zeros_like(local_count) for _ in range(world_size)]
+        dist.all_gather(all_counts, local_count)
+        counts = [int(c.item()) for c in all_counts]
+        max_count = max(counts) if counts else int(local_count.item())
+
+        if embeds_tensor.shape[0] < max_count:
+            pad_shape = (max_count,) + tuple(embeds_tensor.shape[1:])
+            padded = torch.zeros(pad_shape, dtype=embeds_tensor.dtype, device=training_args.device)
+            if embeds_tensor.shape[0] > 0:
+                padded[: embeds_tensor.shape[0]] = embeds_tensor
+            embeds_tensor = padded
+
+        output_shape = (world_size * max_count,) + tuple(embeds_tensor.shape[1:])
         gathered_embeds_tensor = torch.empty(output_shape, dtype=embeds_tensor.dtype, device=training_args.device)
         dist.all_gather_into_tensor(gathered_embeds_tensor, embeds_tensor)
-        final_embeddings = gathered_embeds_tensor.cpu().float().numpy()
+
+        # Trim the padding using per-rank counts, preserving rank order
+        if sum(counts) > 0:
+            offset = 0
+            slices = []
+            for c in counts:
+                if c > 0:
+                    slices.append(gathered_embeds_tensor[offset : offset + c])
+                offset += max_count
+            final_embeddings = torch.cat(slices, dim=0).cpu().float().numpy() if slices else np.array([])
+        else:
+            final_embeddings = np.array([])
         # Gather metadata, for which all_gather_object is appropriate
         gathered_gt_infos = [None for _ in range(world_size)]
         dist.all_gather_object(gathered_gt_infos, local_gt_infos)

@@ -9,6 +9,7 @@ import os
 from typing import List, Dict, Any, Tuple
 
 import datasets
+import torchaudio
 
 from src.model.processor import process_input_text
 from src.data.eval_dataset.audio_instruction_utils import build_query_text
@@ -113,6 +114,12 @@ def load_audio_ave_dataset(*args: Any, **kwargs: Any):
         if not os.path.isfile(audio_abs):
             continue
         if not os.path.isfile(video_abs):
+            continue
+        try:
+            info = torchaudio.info(audio_abs)
+            if info.num_frames <= 0 or info.sample_rate <= 0:
+                continue
+        except Exception:
             continue
         audio_records.append(
             {

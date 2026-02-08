@@ -14,7 +14,7 @@ import yaml
 from transformers import HfArgumentParser
 
 from src.arguments import ModelArguments, DataArguments, TrainingArguments
-from src.data.collator.train_collator_omni import MultimodalDataCollator
+from src.data.collator.train_collator_omni import OmniAutoProcessorCollator
 from src.data.loader.mixed_dataset import init_mixed_dataset
 from src.model.processor import load_processor, get_backbone_name
 from src.trainer_omni import OmniEmbedder, OmniBiEncoder, OmniEmbedTrainer, log_trainable_stats
@@ -112,7 +112,7 @@ def main():
                     task_config['image_dir'] = os.path.join(data_args.data_basedir, image_dir)
         train_dataset = init_mixed_dataset(dataset_config, model_args, data_args, training_args)
 
-    train_collator = MultimodalDataCollator(processor, model_args, data_args, training_args)
+    train_collator = OmniAutoProcessorCollator(processor, model_args, data_args, training_args)
 
     trainer = OmniEmbedTrainer(
         model=model,

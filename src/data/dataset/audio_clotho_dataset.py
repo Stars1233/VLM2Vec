@@ -8,10 +8,19 @@ from typing import Any, Dict, List, Tuple
 
 import datasets
 import pandas as pd
+import torchaudio
 
 from src.data.dataset.base_pair_dataset import AutoPairDataset
 from src.utils.basic_utils import print_master
 from src.data.eval_dataset.audio_instruction_utils import build_query_text
+
+
+def _is_valid_audio_path(path: str) -> bool:
+    try:
+        info = torchaudio.info(path)
+        return info.num_frames > 0 and info.sample_rate > 0
+    except Exception:
+        return False
 
 
 def _expand_clotho_rows(csv_path: str, audio_dir: str) -> List[Dict[str, str]]:
@@ -73,6 +82,8 @@ def load_audio_clotho_dataset(*args: Any, **kwargs: Any):
     for r in records:
         audio_path = r["audio_path"]
         if not os.path.isfile(audio_path):
+            continue
+        if not _is_valid_audio_path(audio_path):
             continue
         query_text = build_query_text("Clotho", r["text"])
         assert isinstance(query_text, list) and len(query_text) == 1 and isinstance(query_text[0], str) and query_text[0].strip()
