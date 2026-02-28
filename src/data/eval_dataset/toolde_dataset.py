@@ -2,6 +2,7 @@ from typing import List
 from datasets import Dataset
 import os
 import json
+import math
 
 
 class DatasetWithLength:
@@ -142,13 +143,23 @@ def data_prepare_candidate(batch_dict, *args, **kwargs):
 def load_query_data(query_file_path):
     """
     加载query文件
-    支持JSONL格式和JSON格式
+    支持Parquet格式、JSONL格式和JSON格式
     字段: id, query, label (或 labels), subtask
     """
+    import pandas as pd
+
     queries = []
 
+    if query_file_path.endswith('.parquet'):
+        # Parquet格式：每行一个query记录
+        df = pd.read_parquet(query_file_path)
+        for row in df.to_dict(orient="records"):
+            if "subtask" not in row:
+                # MMEB-V3 parquet 常见字段是 category
+                row["subtask"] = row.get("category", None)
+            queries.append(_parse_query_data(row))
     # 检查文件扩展名，支持.json和.jsonl
-    if query_file_path.endswith('.json') and not query_file_path.endswith('.jsonl'):
+    elif query_file_path.endswith('.json') and not query_file_path.endswith('.jsonl'):
         # JSON格式：整个文件是一个JSON数组
         with open(query_file_path, 'r', encoding='utf-8') as f:
             data_list = json.load(f)
@@ -179,7 +190,12 @@ def _parse_query_data(data):
         query_text = f"{instruction} {query_text}".strip()
 
     # 支持 label (单数) 和 labels (复数) 字段
-    label_data = data.get('label') or data.get('labels', [])
+    label_data = data.get('label', None)
+    if label_data is None:
+        label_data = data.get('labels', [])
+    # parquet 中可能出现 NaN，按空处理
+    if isinstance(label_data, float) and math.isnan(label_data):
+        label_data = []
     pos_ids = []
 
     try:

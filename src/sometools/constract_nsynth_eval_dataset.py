@@ -8,8 +8,8 @@ from typing import Dict, Any, List, Tuple, Optional
 import datasets
 
 # ========= CONFIG =========
-SRC_ROOT = "/code/.cache/datasets/MMEB-v2_1/audio-tasks/nsynth/data"
-OUT_DIR  = "/code/.cache/datasets/MMEB-v2_1/audio-tasks/nsynth-1k"
+SRC_ROOT = "/data/mengrui/.cache/huggingface/datasets/MMEB-V3/audio-tasks/nsynth/data"
+OUT_DIR  = "/data/mengrui/.cache/huggingface/datasets/MMEB-V3/audio-tasks/nsynth-1k"
 
 N_EVAL = 1000
 SEED = 17

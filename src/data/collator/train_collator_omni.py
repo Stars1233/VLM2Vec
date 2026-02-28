@@ -411,72 +411,102 @@ class OmniAutoProcessorCollator:
             s = (q_sig, p_sig)
             groups.setdefault(s, []).append(i)
 
-        max_len = int(getattr(self.data_args, "max_len", 256))
+        raw_max_len = getattr(self.data_args, "max_len", None)
+        max_len = 256 if raw_max_len is None else int(raw_max_len)
         use_chat_template = self._should_use_chat_template()
         if use_chat_template and not getattr(self, "_printed_chat_template_info", False):
             print("[INFO] OmniAutoProcessorCollator: using apply_chat_template + process_mm_info (Nemotron-style)")
             self._printed_chat_template_info = True
 
-        def _merge(out_list: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
-            # out_list already per-group; we need reconstruct per-example order.
-            # We'll build dict of lists then stack/pad is already done by processor.
-            # Ensure missing batch-first keys are filled so batch dims align.
-            batch_first_keys = {
-                "input_ids",
-                "attention_mask",
-                "token_type_ids",
-                "position_ids",
-                "input_features",
-                "feature_attention_mask",
-                "audio_feature_lengths",
-                "labels",
-            }
-            key_refs = {}
+        def _merge(out_list: List[Dict[str, torch.Tensor]], idx_chunks: List[List[int]], total_bsz: int) -> Dict[str, torch.Tensor]:
+            # Merge per-group outputs back to original sample order.
+            all_keys = set()
             for out in out_list:
-                for k, v in out.items():
-                    if k in batch_first_keys and isinstance(v, torch.Tensor):
-                        key_refs.setdefault(k, v)
-            if key_refs:
-                for out in out_list:
-                    # infer batch size from any tensor in this out
-                    bsz = None
-                    for v in out.values():
-                        if isinstance(v, torch.Tensor):
-                            bsz = v.shape[0]
-                            break
-                    if bsz is None:
-                        continue
-                    for k, ref in key_refs.items():
-                        if k not in out:
-                            out[k] = torch.zeros(
-                                (bsz, *ref.shape[1:]),
-                                device=ref.device,
-                                dtype=ref.dtype,
-                            )
-            merged = {}
-            for out in out_list:
-                for k, v in out.items():
-                    merged.setdefault(k, []).append(v)
-            # concatenate along batch dim
-            final = {}
+                all_keys.update(out.keys())
+
+            final: Dict[str, Any] = {}
             debug_merge = os.environ.get("VLM2VEC_DEBUG_MERGE_SHAPES", "").lower()
-            for k, chunks in merged.items():
-                if isinstance(chunks[0], torch.Tensor):
-                    if debug_merge:
-                        shapes = [tuple(c.shape) for c in chunks]
-                        if len(set(shapes)) != 1:
-                            print(f"[DEBUG][merge] key={k} shapes={shapes}")
-                    final[k] = torch.cat(chunks, dim=0)
-                else:
-                    # e.g. lists (rare from processor), keep concatenation
-                    if debug_merge:
-                        lens = [len(c) for c in chunks]
-                        if len(set(lens)) != 1:
-                            print(f"[DEBUG][merge] key={k} lens={lens}")
-                    tmp = []
-                    for c in chunks:
-                        tmp.extend(c)
-                    final[k] = tmp
+
+            for k in all_keys:
+                example = None
+                for out in out_list:
+                    if k in out and out[k] is not None:
+                        example = out[k]
+                        break
+                if example is None:
+                    continue
+
+                if isinstance(example, torch.Tensor):
+                    slots = [None] * total_bsz
+                    ref = None
+                    extra = []
+                    for out, chunk in zip(out_list, idx_chunks):
+                        if k not in out or out[k] is None:
+                            continue
+                        v = out[k]
+                        if not isinstance(v, torch.Tensor):
+                            continue
+                        ref = ref if ref is not None else v
+                        if v.dim() > 0 and v.shape[0] == len(chunk):
+                            for j, orig_i in enumerate(chunk):
+                                slots[orig_i] = v[j : j + 1]
+                        else:
+                            extra.append(v)
+
+                    if any(x is not None for x in slots):
+                        if ref is not None:
+                            for i, x in enumerate(slots):
+                                if x is None:
+                                    slots[i] = torch.zeros(
+                                        (1, *ref.shape[1:]),
+                                        device=ref.device,
+                                        dtype=ref.dtype,
+                                    )
+                        parts = [x for x in slots if isinstance(x, torch.Tensor)]
+                        if debug_merge and len(parts) > 0:
+                            shapes = [tuple(c.shape) for c in parts]
+                            if len(set(shapes)) != 1:
+                                print(f"[DEBUG][merge] key={k} reordered_shapes={shapes}")
+                        if len(parts) > 0:
+                            final[k] = torch.cat(parts, dim=0)
+                            continue
+                    if len(extra) > 0:
+                        final[k] = torch.cat(extra, dim=0)
+                    continue
+
+                if isinstance(example, list):
+                    slots = [None] * total_bsz
+                    per_sample = True
+                    for out, chunk in zip(out_list, idx_chunks):
+                        if k not in out or out[k] is None:
+                            continue
+                        v = out[k]
+                        if isinstance(v, list) and len(v) == len(chunk):
+                            for j, orig_i in enumerate(chunk):
+                                slots[orig_i] = v[j]
+                        else:
+                            per_sample = False
+                            break
+                    if per_sample and any(x is not None for x in slots):
+                        final[k] = slots
+                    else:
+                        tmp = []
+                        for out in out_list:
+                            if k not in out or out[k] is None:
+                                continue
+                            v = out[k]
+                            if isinstance(v, list):
+                                tmp.extend(v)
+                            else:
+                                tmp.append(v)
+                        final[k] = tmp
+                    continue
+
+                for out in out_list:
+                    if k in out and out[k] is not None:
+                        final[k] = out[k]
+                        break
+
             return final
 
         # process qry/pos in matching grouping to preserve alignment
@@ -508,8 +538,8 @@ class OmniAutoProcessorCollator:
             order_chunks.append(sub)
 
         # merge
-        qry_batch = _merge(qry_outs)
-        pos_batch = _merge(pos_outs)
+        qry_batch = _merge(qry_outs, order_chunks, len(examples))
+        pos_batch = _merge(pos_outs, order_chunks, len(examples))
 
         # attach metadata
         qry_batch["valid_example_mask"] = torch.tensor(valid, dtype=torch.bool)

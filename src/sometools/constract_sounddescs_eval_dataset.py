@@ -6,21 +6,29 @@ from typing import Dict, Any, List, Tuple
 
 import datasets
 
-# ✅ 新增：pyarrow 用于流式重写 corpus
+# ✅ pyarrow: 流式重写 corpus（展平 audio struct，避免 nested bug & 降低 CPU）
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 
-SRC_ROOT = "/code/.cache/datasets/MMEB-v2_1/audio-tasks/sounddescs"
-OUT_DIR  = "/code/.cache/datasets/MMEB-v2_1/audio-tasks/sounddescs-1k"
+# ========= CONFIG =========
+SRC_ROOT = "/data/mengrui/.cache/huggingface/datasets/MMEB-V3/audio-tasks/sounddescs"
+OUT_DIR  = "/data/mengrui/.cache/huggingface/datasets/MMEB-V3/audio-tasks/sounddescs-1k"
 
 N_EVAL = 1000
 SEED = 17
 
-# ✅ 控制 CPU / 内存：batch 越小越省（但会稍慢）
+# ✅ 控制 CPU / 内存：batch 越小越省（但稍慢）
 CORPUS_BATCH_SIZE = 256
 PYARROW_USE_THREADS = False
+
+# ✅ 只抽 eval，不再产生 train
+WRITE_CORPUS = True  # 如果你 eval 只需要 query/qrels，可以设 False
+
+
+def ensure_dir(p: str):
+    os.makedirs(p, exist_ok=True)
 
 
 def load_parquet_dir(dirpath: str) -> datasets.Dataset:
@@ -37,16 +45,12 @@ def list_parquet_files(dirpath: str) -> List[str]:
     return files
 
 
-def pick_first_existing(cols: List[str], available: List[str], name: str) -> str:
+def pick_first_existing(cands: List[str], available: List[str], name: str) -> str:
     s = set(available)
-    for c in cols:
+    for c in cands:
         if c in s:
             return c
-    raise KeyError(f"[{name}] cannot find any of {cols}. available={available}")
-
-
-def ensure_dir(p: str):
-    os.makedirs(p, exist_ok=True)
+    raise KeyError(f"[{name}] cannot find any of {cands}. available={available}")
 
 
 def dump_query(ds: datasets.Dataset, out_dir: str, qid_col: str):
@@ -66,18 +70,12 @@ def dump_qrels(ds: datasets.Dataset, out_dir: str, qid_col: str, qrels_by_qid: D
     datasets.Dataset.from_list(rows).to_parquet(os.path.join(out_dir, "qrels.parquet"))
 
 
-def rewrite_corpus_flat_pyarrow(
-    corpus_files: List[str],
-    out_path: str,
-    cid_col: str,
-):
+def rewrite_corpus_flat_pyarrow(corpus_files: List[str], out_path: str, cid_col: str):
     """
-    ✅ 流式重写 corpus：
-    - 不用 datasets.map（避免 CPU 爆）
-    - 每次读取一小批 record_batch
-    - audio(struct) -> audio_path/audio_bytes/(audio_array/audio_sampling_rate)
-    - 删除 audio 列，保留其它列
-    - 确保有 corpus-id 列（string）
+    流式重写 corpus：
+    - 每次读取小批 record_batch
+    - 如果有 audio(struct)，展平为 audio_path/audio_bytes/(audio_array/audio_sampling_rate)，并删除 audio
+    - 确保有 corpus-id（string）
     """
     writer = None
 
@@ -86,7 +84,7 @@ def rewrite_corpus_flat_pyarrow(
         for rb in pf.iter_batches(batch_size=CORPUS_BATCH_SIZE, use_threads=PYARROW_USE_THREADS):
             t = pa.Table.from_batches([rb])
 
-            # 1) 生成 corpus-id（如果原来就有则保持；否则用 cid_col）
+            # 1) corpus-id
             if "corpus-id" in t.column_names:
                 corpus_id_arr = pc.cast(t["corpus-id"], pa.string())
             else:
@@ -95,81 +93,80 @@ def rewrite_corpus_flat_pyarrow(
                 corpus_id_arr = pc.cast(t[cid_col], pa.string())
                 t = t.append_column("corpus-id", corpus_id_arr)
 
-            # 2) 展平 audio struct（如果存在）
+            # 2) flatten audio struct
             if "audio" in t.column_names:
                 audio_col = t["audio"]
-                # audio 必须是 struct 才能 field 提取；不是 struct 就跳过
                 if pa.types.is_struct(audio_col.type):
-                    fields = set(audio_col.type)
-                    # path/bytes
-                    if "path" in fields:
+                    fields = set(audio_col.type.names)
+                    if "path" in fields and "audio_path" not in t.column_names:
                         t = t.append_column("audio_path", pc.struct_field(audio_col, "path"))
-                    if "bytes" in fields:
+                    if "bytes" in fields and "audio_bytes" not in t.column_names:
                         t = t.append_column("audio_bytes", pc.struct_field(audio_col, "bytes"))
-                    # 可选字段：array/sampling_rate（有就保留）
-                    if "array" in fields:
+                    if "array" in fields and "audio_array" not in t.column_names:
                         t = t.append_column("audio_array", pc.struct_field(audio_col, "array"))
-                    if "sampling_rate" in fields:
+                    if "sampling_rate" in fields and "audio_sampling_rate" not in t.column_names:
                         t = t.append_column("audio_sampling_rate", pc.struct_field(audio_col, "sampling_rate"))
-                # 删除 nested audio（关键：规避 nested bug）
+                # ✅ 关键：删除 nested audio，规避某些下游 nested 兼容问题
                 t = t.drop(["audio"])
 
-            # 3) 写出（第一次初始化 writer）
             if writer is None:
                 writer = pq.ParquetWriter(out_path, t.schema, compression="snappy", use_dictionary=True)
             writer.write_table(t)
 
-    if writer is not None:
-        writer.close()
-    else:
+    if writer is None:
         raise RuntimeError("No data written for corpus (empty input?)")
+    writer.close()
 
 
 def main():
     rng = random.Random(SEED)
 
-    out_train = os.path.join(OUT_DIR, "train")
-    out_eval  = os.path.join(OUT_DIR, "eval")
-    ensure_dir(out_train)
+    out_eval = os.path.join(OUT_DIR, "eval")
     ensure_dir(out_eval)
 
-    # 1) load query/qrels（小，OK）
-    query_ds  = load_parquet_dir(os.path.join(SRC_ROOT, "query"))
-    qrels_ds  = load_parquet_dir(os.path.join(SRC_ROOT, "qrels"))
+    # 1) load query/qrels（相对小）
+    query_ds = load_parquet_dir(os.path.join(SRC_ROOT, "query"))
+    qrels_ds = load_parquet_dir(os.path.join(SRC_ROOT, "qrels"))
 
-    # 2) corpus 不用 datasets 全量 load（会重） -> 只拿文件列表 + 用 pyarrow 流式
+    # 2) corpus：不全量 load，只拿 parquet 文件列表 + schema probe
     corpus_dir = os.path.join(SRC_ROOT, "corpus")
     corpus_files = list_parquet_files(corpus_dir)
 
-    # 为了选 cid_col：只用 datasets 轻量读一次 schema（不读内容）
-    # （也可以用 pyarrow 读 schema，但 datasets 你原来就有）
+    # 仅用一个 shard probe schema 来找 cid_col
     corpus_schema_probe = datasets.load_dataset("parquet", data_files={"data": corpus_files[:1]}, split="data")
-    cid_col = pick_first_existing(["corpus_id", "corpus-id", "id", "audio_id", "docid"], corpus_schema_probe.column_names, "corpus")
+    cid_col = pick_first_existing(
+        ["corpus_id", "corpus-id", "id", "audio_id", "docid"],
+        corpus_schema_probe.column_names,
+        "corpus",
+    )
 
     qid_col = pick_first_existing(["query_id", "query-id", "id", "qid"], query_ds.column_names, "query")
-    qrels_qid_col   = pick_first_existing(["query-id", "query_id", "qid", "id"], qrels_ds.column_names, "qrels")
-    qrels_cid_col   = pick_first_existing(["corpus-id", "corpus_id", "cid", "docid", "id"], qrels_ds.column_names, "qrels")
+    qrels_qid_col = pick_first_existing(["query-id", "query_id", "qid", "id"], qrels_ds.column_names, "qrels")
+    qrels_cid_col = pick_first_existing(["corpus-id", "corpus_id", "cid", "docid", "id"], qrels_ds.column_names, "qrels")
     qrels_score_col = pick_first_existing(["score", "relevance", "rel"], qrels_ds.column_names, "qrels")
 
-    # 3) qrels 映射
+    # 3) 构建 qrels 映射：每个 qid 取最高分的 pos
     qrels_by_qid: Dict[str, Tuple[str, float]] = {}
     for r in qrels_ds:
         qid = str(r[qrels_qid_col])
         cid = str(r[qrels_cid_col])
-        sc  = float(r[qrels_score_col])
+        sc = float(r[qrels_score_col])
         if (qid not in qrels_by_qid) or (sc > qrels_by_qid[qid][1]):
             qrels_by_qid[qid] = (cid, sc)
 
-    # 4) corpus id set：这里用 pyarrow 快速扫一遍“cid_col”列（避免全量 datasets load）
+    # 4) 用 pyarrow 扫一遍 corpus id（只读 cid_col 列）
     corpus_ids = set()
     for fp in corpus_files:
         pf = pq.ParquetFile(fp)
-        for rb in pf.iter_batches(batch_size=2048, columns=[cid_col], use_threads=PYARROW_USE_THREADS):
+        for rb in pf.iter_batches(
+            batch_size=2048,
+            columns=[cid_col] if cid_col in pf.schema.names else None,
+            use_threads=PYARROW_USE_THREADS,
+        ):
             arr = rb.column(0)
-            # to_pylist 对 10k 级别很安全；如果更大可改成逐个 as_py
             corpus_ids.update(str(x) for x in arr.to_pylist())
 
-    # 5) 过滤可用 query
+    # 5) 过滤可用 query（必须有 qrels 且 pos_cid 在 corpus）
     kept_idx = []
     for i, r in enumerate(query_ds):
         qid = str(r[qid_col])
@@ -180,38 +177,34 @@ def main():
             continue
         kept_idx.append(i)
 
-    if len(kept_idx) <= N_EVAL:
-        raise RuntimeError(f"Not enough queries after filtering: {len(kept_idx)} <= N_EVAL={N_EVAL}")
+    if len(kept_idx) < N_EVAL:
+        raise RuntimeError(f"Not enough queries after filtering: kept={len(kept_idx)} < N_EVAL={N_EVAL}")
 
     rng.shuffle(kept_idx)
-    eval_idx  = kept_idx[:N_EVAL]
-    train_idx = kept_idx[N_EVAL:]
+    eval_idx = kept_idx[:N_EVAL]
+    eval_q = query_ds.select(eval_idx)
 
-    train_q = query_ds.select(train_idx)
-    eval_q  = query_ds.select(eval_idx)
+    # 6) 写 eval 的 query/qrels
+    dump_query(eval_q, out_eval, qid_col)
+    dump_qrels(eval_q, out_eval, qid_col, qrels_by_qid)
 
-    # 6) 写 query/qrels
-    dump_query(train_q, out_train, qid_col)
-    dump_query(eval_q,  out_eval,  qid_col)
+    # 7) 写 corpus（可选）
+    if WRITE_CORPUS:
+        rewrite_corpus_flat_pyarrow(
+            corpus_files=corpus_files,
+            out_path=os.path.join(out_eval, "corpus.parquet"),
+            cid_col=cid_col,
+        )
 
-    dump_qrels(train_q, out_train, qid_col, qrels_by_qid)
-    dump_qrels(eval_q,  out_eval,  qid_col, qrels_by_qid)
-
-    # 7) 写 corpus（关键：pyarrow 流式 flatten，CPU 友好）
-    rewrite_corpus_flat_pyarrow(
-        corpus_files=corpus_files,
-        out_path=os.path.join(out_train, "corpus.parquet"),
-        cid_col=cid_col,
-    )
-    # train/eval 共用同一个
-    # 直接复制文件（避免重复计算）
-    import shutil
-    shutil.copy2(os.path.join(out_train, "corpus.parquet"), os.path.join(out_eval, "corpus.parquet"))
-
-    print("[DONE] SoundDescs-1k(flat) built at:", OUT_DIR)
-    print(" - corpus written to:", os.path.join(out_eval, "corpus.parquet"))
+    print("[DONE] SoundDescs-1k (eval-only) built at:", OUT_DIR)
+    print(" - eval queries:", len(eval_q), f"(target={N_EVAL})")
+    print(" - corpus written:", os.path.join(out_eval, "corpus.parquet") if WRITE_CORPUS else "(skipped)")
     print(" - cid_col used:", cid_col)
-    print(" - kept queries:", len(kept_idx), "eval:", len(eval_q), "train:", len(train_q))
+    print(" - outputs:")
+    print(f"   * {out_eval}/query.parquet")
+    print(f"   * {out_eval}/qrels.parquet")
+    if WRITE_CORPUS:
+        print(f"   * {out_eval}/corpus.parquet")
 
 
 if __name__ == "__main__":

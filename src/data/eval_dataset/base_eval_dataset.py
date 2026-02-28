@@ -126,6 +126,13 @@ def generate_cand_dataset(dataset, corpus):
     """
     cand_rows = []
     all_cand_name = set()
+
+    def _normalize_audio_item(a):
+        # Common pattern in datasets: cand_audio stores a single-item list.
+        if isinstance(a, list) and len(a) == 1:
+            return a[0]
+        return a
+
     for row in dataset:
         # 检测候选项使用的视觉字段（cand_image 或 cand_video）
         cand_visual_key = None
@@ -145,8 +152,16 @@ def generate_cand_dataset(dataset, corpus):
             continue
 
         # ✅ 旧架构/local 模式：保持原逻辑不变
-        assert len(row["cand_text"]) == len(row[cand_visual_key]) == len(row["dataset_infos"]["cand_names"])
-        for cand_text, cand_visual, cand_name in zip(row["cand_text"], row[cand_visual_key], row["dataset_infos"]["cand_names"]):
+        cand_audio_seq = row.get("cand_audio", None)
+        if cand_audio_seq is not None:
+            assert len(cand_audio_seq) == len(row["cand_text"])
+        else:
+            cand_audio_seq = [None] * len(row["cand_text"])
+
+        assert len(row["cand_text"]) == len(row[cand_visual_key]) == len(row["dataset_infos"]["cand_names"]) == len(cand_audio_seq)
+        for cand_text, cand_visual, cand_name, cand_audio in zip(
+            row["cand_text"], row[cand_visual_key], row["dataset_infos"]["cand_names"], cand_audio_seq
+        ):
             if cand_name not in all_cand_name:
                 # 根据原始字段决定使用哪个键
                 cand_row = {
@@ -154,6 +169,8 @@ def generate_cand_dataset(dataset, corpus):
                     "dataset_infos": {"cand_name": cand_name},
                 }
                 cand_row[cand_visual_key] = [cand_visual]
+                if cand_audio is not None:
+                    cand_row["cand_audio"] = _normalize_audio_item(cand_audio)
                 cand_rows.append(cand_row)
                 all_cand_name.add(cand_name)
 
@@ -170,6 +187,12 @@ def generate_cand_dataset(dataset, corpus):
                     "dataset_infos": {"cand_name": row["dataset_infos"]["cand_names"][0]},
                 }
                 corpus_row[corpus_visual_key] = row[corpus_visual_key]
+                if "cand_audio" in row:
+                    # corpus row is one candidate; keep a single audio item.
+                    corpus_audio = row["cand_audio"]
+                    if isinstance(corpus_audio, list) and len(corpus_audio) == 1:
+                        corpus_audio = corpus_audio[0]
+                    corpus_row["cand_audio"] = _normalize_audio_item(corpus_audio)
                 cand_rows.append(corpus_row)
                 all_cand_name.add(cand_name)
 

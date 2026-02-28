@@ -6,19 +6,22 @@ from typing import List, Dict, Any
 
 import datasets
 
-SRC_DIR = "/code/.cache/datasets/MMEB-v2_1/audio-tasks/speechcoco/data"
-OUT_DIR = "/code/.cache/datasets/MMEB-v2_1/audio-tasks/speechcoco-1k"
+# ========= CONFIG =========
+SRC_DIR = "/data/mengrui/.cache/huggingface/datasets/MMEB-V3/audio-tasks/speechcoco/data"
+OUT_DIR = "/data/mengrui/.cache/huggingface/datasets/MMEB-V3/audio-tasks/speechcoco-1k"
 
-N_TRAIN = 1000
-N_EVAL = 1000
-CAND_MAX = 10000
+N_TEST = 1000          # ✅ 只需要测试集 query 数
+CAND_MAX = 10000       # ✅ 测试候选池大小（unique image_id）
 SEED = 17
 
+
 def _find_files() -> List[str]:
+    # 你原来读 validation-*.parquet，这里保留
     files = sorted(glob.glob(os.path.join(SRC_DIR, "validation-*.parquet")))
     if not files:
         raise FileNotFoundError(f"No parquet found under: {SRC_DIR}")
     return files
+
 
 def _infer_image_col(ds: datasets.Dataset) -> str:
     candidates = ["image", "image_path", "image_file", "img", "img_path"]
@@ -28,16 +31,19 @@ def _infer_image_col(ds: datasets.Dataset) -> str:
             return c
     raise KeyError(f"Cannot find image column in dataset columns={sorted(cols)[:50]}...")
 
+
 def _require_cols(ds: datasets.Dataset, cols: List[str]):
     missing = [c for c in cols if c not in ds.column_names]
     if missing:
         raise KeyError(f"Missing required columns: {missing}. Available={ds.column_names}")
 
+
 def _write_parquet(obj: Dict[str, list], path: str):
     datasets.Dataset.from_dict(obj).to_parquet(path)
 
+
 def main():
-    random.seed(SEED)
+    rng = random.Random(SEED)
     os.makedirs(OUT_DIR, exist_ok=True)
 
     files = _find_files()
@@ -53,83 +59,61 @@ def main():
         img_id = str(row["image_id"])
         if img_id not in img_map:
             img_map[img_id] = row[image_col]
+
     all_img_ids = list(img_map.keys())
-    random.shuffle(all_img_ids)
+    rng.shuffle(all_img_ids)
     print(f"[INFO] unique image_id={len(all_img_ids)}")
 
-    # 2) 先粗分 train/eval candidate（尽量不重叠）
-    #    这里直接按 image_id 分割，比按 row 分割更干净
-    need_imgs = min(len(all_img_ids), 2 * CAND_MAX)
-    train_img_ids = all_img_ids[: min(CAND_MAX, need_imgs)]
-    eval_img_ids = all_img_ids[min(CAND_MAX, need_imgs): min(2 * CAND_MAX, need_imgs)]
+    # 2) 选 test corpus（最多 CAND_MAX 个 unique image）
+    test_img_ids = all_img_ids[: min(CAND_MAX, len(all_img_ids))]
+    test_cand_set = set(test_img_ids)
 
-    if len(eval_img_ids) < min(CAND_MAX, len(all_img_ids) - len(train_img_ids)):
-        print(f"[WARN] not enough unique images to make eval_corpus fully disjoint at size {CAND_MAX}. "
-              f"eval_corpus size will be {len(eval_img_ids)}.")
+    if len(test_img_ids) == 0:
+        raise RuntimeError("No images collected for corpus (empty dataset?)")
 
-    train_cand_set = set(train_img_ids)
-    eval_cand_set = set(eval_img_ids)
+    print(f"[INFO] corpus_test={len(test_img_ids)} (target<= {CAND_MAX})")
 
-    overlap = len(train_cand_set & eval_cand_set)
-    if overlap > 0:
-        print(f"[WARN] candidate overlap detected: {overlap} images. (Should be 0 normally)")
-
-    print(f"[INFO] corpus_train={len(train_img_ids)} | corpus_eval={len(eval_img_ids)}")
-
-    # 3) 从原始 rows 中筛出“正例在对应候选池内”的 rows，再各自抽 1k
-    train_rows = []
-    eval_rows = []
+    # 3) 从原始 rows 中筛出“正例 image_id 在 test 候选池内”的 rows，再抽 N_TEST
+    test_rows = []
     for row in ds:
         img_id = str(row["image_id"])
-        if img_id in train_cand_set:
-            train_rows.append(row)
-        elif img_id in eval_cand_set:
-            eval_rows.append(row)
+        if img_id in test_cand_set:
+            test_rows.append(row)
 
-    random.shuffle(train_rows)
-    random.shuffle(eval_rows)
+    rng.shuffle(test_rows)
 
-    if len(train_rows) < N_TRAIN:
-        raise RuntimeError(f"Not enough train rows after filtering: {len(train_rows)} < {N_TRAIN}")
-    if len(eval_rows) < N_EVAL:
-        raise RuntimeError(f"Not enough eval rows after filtering: {len(eval_rows)} < {N_EVAL}")
+    if len(test_rows) < N_TEST:
+        raise RuntimeError(f"Not enough test rows after filtering: {len(test_rows)} < {N_TEST}")
 
-    train_rows = train_rows[:N_TRAIN]
-    eval_rows = eval_rows[:N_EVAL]
+    test_rows = test_rows[:N_TEST]
 
-    # 4) 写 corpus（各自独立）
+    # 4) 写 corpus（测试候选池）
     _write_parquet(
-        {"corpus-id": train_img_ids, "image": [img_map[iid] for iid in train_img_ids]},
-        os.path.join(OUT_DIR, "corpus_train_10k.parquet"),
+        {"corpus-id": test_img_ids, "image": [img_map[iid] for iid in test_img_ids]},
+        os.path.join(OUT_DIR, "corpus_test_10k.parquet"),
     )
-    _write_parquet(
-        {"corpus-id": eval_img_ids, "image": [img_map[iid] for iid in eval_img_ids]},
-        os.path.join(OUT_DIR, "corpus_eval_10k.parquet"),
-    )
-    print("[OK] wrote corpus_train_10k.parquet and corpus_eval_10k.parquet")
+    print("[OK] wrote corpus_test_10k.parquet")
 
-    def build_query_and_qrels(rows: List[Dict[str, Any]], split: str):
-        q = {
-            "id": [str(r["id"]) for r in rows],
-            "audio": [r["audio"] for r in rows],
-            "image_id": [str(r["image_id"]) for r in rows],
-        }
-        _write_parquet(q, os.path.join(OUT_DIR, f"query_{split}.parquet"))
+    # 5) 写 query + qrels（测试集）
+    query = {
+        "id": [str(r["id"]) for r in test_rows],
+        "audio": [r["audio"] for r in test_rows],
+        "image_id": [str(r["image_id"]) for r in test_rows],
+    }
+    _write_parquet(query, os.path.join(OUT_DIR, "query_test.parquet"))
 
-        qrels = {
-            "query-id": [str(r["id"]) for r in rows],
-            "corpus-id": [str(r["image_id"]) for r in rows],
-            "score": [1 for _ in rows],
-        }
-        _write_parquet(qrels, os.path.join(OUT_DIR, f"qrels_{split}.parquet"))
-        print(f"[OK] wrote query_{split}.parquet and qrels_{split}.parquet")
+    qrels = {
+        "query-id": [str(r["id"]) for r in test_rows],
+        "corpus-id": [str(r["image_id"]) for r in test_rows],
+        "score": [1 for _ in test_rows],
+    }
+    _write_parquet(qrels, os.path.join(OUT_DIR, "qrels_test.parquet"))
 
-    build_query_and_qrels(train_rows, "train")
-    build_query_and_qrels(eval_rows, "eval")
+    print("[OK] wrote query_test.parquet and qrels_test.parquet")
 
-    print("\n[DONE] SpeechCOCO lite (disjoint candidates) built at:", OUT_DIR)
-    print(f" - train: q={N_TRAIN}, c={len(train_img_ids)}")
-    print(f" - eval : q={N_EVAL}, c={len(eval_img_ids)}")
+    print("\n[DONE] SpeechCOCO lite (test-only) built at:", OUT_DIR)
+    print(f" - test: q={len(test_rows)}, c={len(test_img_ids)}")
+
 
 if __name__ == "__main__":
     main()

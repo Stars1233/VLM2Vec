@@ -14,23 +14,23 @@ echo "Python version: $(python --version)"
 export EXP_NAME=Qwen2_5Omni_3B.audio.lora16.BS512.IB64.GCq8p8.NormTemp002.lr5e5.step5kwarm100
 
 export WANDB_NAME=$EXP_NAME
-export EXP_DIR=/code/OLM2VEC_and_MMEB-V3/VLM2Vec1/VLM2Vec/exps/output_model/$EXP_NAME
+export EXP_DIR=exps/output_model/$EXP_NAME
 export WANDB_DIR=$EXP_DIR
 echo $EXP_DIR
 
 mkdir -p $EXP_DIR/wandb
 rm -rf $EXP_DIR/wandb/*
 
-cd /code/OLM2VEC_and_MMEB-V3/VLM2Vec1/VLM2Vec
-cmd="CUDA_VISIBLE_DEVICES=0,1 \
+cd /data/mengrui/OLM2Vec/OLM2Vec
+cmd="CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 torchrun \
---nproc_per_node=2 \
+--nproc_per_node=8 \
 --master_port=2209 \
 --max_restarts=0 \
 train_omni.py \
 --lora true \
 --lora_r 16 \
---model_name /code/.cache/huggingface/Qwen2.5-Omni-3B \
+--model_name /data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B \
 --model_type qwen2_5_omni \
 --bf16 \
 --pooling mean \
@@ -41,10 +41,10 @@ train_omni.py \
 --run_name \$EXP_NAME \
 --output_dir \$EXP_DIR \
 --grad_cache True \
---per_device_train_batch_size 2 \
+--per_device_train_batch_size 8 \
 --gc_q_chunk_size 4 \
 --gc_p_chunk_size 4 \
---interleave_batch_size 2 \
+--interleave_batch_size 8 \
 --lr_scheduler_type linear \
 --learning_rate 5e-5 \
 --max_steps 5000 \

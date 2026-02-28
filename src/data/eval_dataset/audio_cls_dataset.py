@@ -214,6 +214,9 @@ def _load_esc50_dataset(path_info: Tuple[str, str, str]) -> datasets.Dataset:
     dataset_path, subset, split = path_info
     parquet_files = sorted(glob.glob(os.path.join(dataset_path, "*.parquet")))
     if not parquet_files:
+        # MMEB-V3 local cache stores ESC-50 shards under esc50/data/.
+        parquet_files = sorted(glob.glob(os.path.join(dataset_path, "data", "*.parquet")))
+    if not parquet_files:
         raise FileNotFoundError(f"ESC-50 parquet files not found under {dataset_path}")
     split_name = split or "train"
     ds_dict = datasets.load_dataset("parquet", data_files={split_name: parquet_files})

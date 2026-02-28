@@ -14,8 +14,11 @@ def data_prepare(batch_dict, *args, **kwargs):
     image_root = kwargs['image_root']
 
     query_texts, query_images, cand_texts, cand_images, dataset_infos = [], [], [], [], []
+    n = len(batch_dict['qry_text'])
+    qry_insts = batch_dict['qry_inst'] if 'qry_inst' in batch_dict else [""] * n
+    tgt_insts = batch_dict['tgt_inst'] if 'tgt_inst' in batch_dict else [""] * n
     for qry_inst, qry_text, qry_img_path, tgt_inst, tgt_captions, tgt_img_paths in (
-            zip(batch_dict['qry_inst'], batch_dict['qry_text'], batch_dict['qry_img_path'], batch_dict['tgt_inst'], batch_dict['tgt_text'], batch_dict['tgt_img_path'])):
+            zip(qry_insts, batch_dict['qry_text'], batch_dict['qry_img_path'], tgt_insts, batch_dict['tgt_text'], batch_dict['tgt_img_path'])):
         qry_inst = "\n" + qry_inst.replace("<|image_1|>", "").strip()
         qry_text = process_input_text(qry_inst, model_backbone, text=qry_text, add_image_token=True)
         # to stay consistent with v1 eval
@@ -25,6 +28,8 @@ def data_prepare(batch_dict, *args, **kwargs):
         query_images.append([{"bytes": [None], "paths": [qry_img_path],
                             "resolutions": [RESOLUTION_MAPPING.get(image_resolution, None)]}])
 
+        tgt_captions = list(tgt_captions)
+        tgt_img_paths = list(tgt_img_paths)
         # subtle target side processing, to stay consistent with v1 eval
         if tgt_captions[0].strip():  # RefCOCO-Matching has valid text inputs
             tgt_inst = tgt_inst.replace("<|image_1|>", "")

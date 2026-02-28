@@ -1,6 +1,5 @@
 import logging
 import math
-from collections import defaultdict
 
 import PIL
 from transformers.image_utils import ChannelDimension
@@ -72,134 +71,6 @@ def _pad_to_min_image_size(image, min_size):
     top = (new_height - height) // 2
     canvas.paste(image, (left, top))
     return canvas
-
-
-def _item_to_orig_index(item):
-    if isinstance(item, tuple):
-        return int(item[0])
-    return int(item)
-
-
-def _cat_tensors_with_auto_pad(parts, key=None):
-    if len(parts) == 0:
-        raise ValueError("Cannot concatenate empty tensor parts.")
-    if len(parts) == 1:
-        return parts[0]
-
-    normalized_parts = []
-    for p in parts:
-        if not isinstance(p, torch.Tensor):
-            raise TypeError(f"Expected tensor part, got {type(p)} for key={key}.")
-        normalized_parts.append(p.reshape(1) if p.dim() == 0 else p)
-    parts = normalized_parts
-
-    ndim = parts[0].dim()
-    if any(p.dim() != ndim for p in parts):
-        shapes = [tuple(p.shape) for p in parts]
-        raise RuntimeError(f"Cannot merge tensors with different ranks for key={key}: {shapes}")
-
-    try:
-        return torch.cat(parts, dim=0)
-    except RuntimeError:
-        if ndim == 1:
-            return torch.cat(parts, dim=0)
-
-    max_tail = [max(p.shape[d] for p in parts) for d in range(1, ndim)]
-    if all(all(p.shape[d] == max_tail[d - 1] for d in range(1, ndim)) for p in parts):
-        return torch.cat(parts, dim=0)
-
-    pad_value = False if parts[0].dtype == torch.bool else 0
-    padded_parts = []
-    for p in parts:
-        target_shape = (p.shape[0], *max_tail)
-        if tuple(p.shape) == target_shape:
-            padded_parts.append(p)
-            continue
-        padded = p.new_full(target_shape, pad_value)
-        slices = (slice(None),) + tuple(slice(0, p.shape[d]) for d in range(1, ndim))
-        padded[slices] = p
-        padded_parts.append(padded)
-    return torch.cat(padded_parts, dim=0)
-
-
-def _merge_group_outputs(ordered_groups, total_batch_size):
-    """
-    Merge per-group processor outputs back to original sample order.
-    Tensor values are merged by batch dimension and auto-padded on non-batch dims when needed.
-    """
-    merged = {}
-    all_keys = set()
-    for _, out in ordered_groups:
-        all_keys.update(out.keys())
-
-    for key in all_keys:
-        example = None
-        for _, out in ordered_groups:
-            val = out.get(key, None)
-            if val is not None:
-                example = val
-                break
-        if example is None:
-            continue
-
-        if isinstance(example, torch.Tensor):
-            slots = [None] * total_batch_size
-            used_slots = False
-            concat_parts = []
-            for items, out in ordered_groups:
-                v = out.get(key, None)
-                if v is None:
-                    continue
-                if isinstance(v, torch.Tensor) and v.dim() > 0 and v.shape[0] == len(items):
-                    used_slots = True
-                    for row_i, item in enumerate(items):
-                        orig_i = _item_to_orig_index(item)
-                        if 0 <= orig_i < total_batch_size:
-                            slots[orig_i] = v[row_i : row_i + 1]
-                elif isinstance(v, torch.Tensor):
-                    concat_parts.append(v)
-
-            if used_slots:
-                parts = [x for x in slots if isinstance(x, torch.Tensor)]
-                if len(parts) > 0:
-                    merged[key] = _cat_tensors_with_auto_pad(parts, key=key)
-                    continue
-            if len(concat_parts) > 0:
-                merged[key] = _cat_tensors_with_auto_pad(concat_parts, key=key)
-            continue
-
-        if isinstance(example, list):
-            slots = [None] * total_batch_size
-            used_slots = False
-            merged_list = []
-            for items, out in ordered_groups:
-                v = out.get(key, None)
-                if v is None:
-                    continue
-                if isinstance(v, list) and len(v) == len(items):
-                    used_slots = True
-                    for row_i, item in enumerate(items):
-                        orig_i = _item_to_orig_index(item)
-                        if 0 <= orig_i < total_batch_size:
-                            slots[orig_i] = v[row_i]
-                elif isinstance(v, list):
-                    merged_list.extend(v)
-                else:
-                    merged_list.append(v)
-
-            if used_slots:
-                merged[key] = [x for x in slots if x is not None]
-            elif len(merged_list) > 0:
-                merged[key] = merged_list
-            continue
-
-        for _, out in ordered_groups:
-            v = out.get(key, None)
-            if v is not None:
-                merged[key] = v
-                break
-
-    return merged
 
 
 def _install_qwen_omni_warning_filters():
@@ -1176,7 +1047,8 @@ def Omni_process_fn(model_inputs: dict, processor, max_length=None):
 
         groups.setdefault(group_key, []).append(i)
 
-    ordered_groups = []
+    out_list = []
+    order = []
     for group_key, sub in groups.items():
         # For audio groups, filter to only include samples with valid audio
         if group_key in ["visual_audio", "audio_only"]:
@@ -1219,12 +1091,30 @@ def Omni_process_fn(model_inputs: dict, processor, max_length=None):
             # Don't pass sampling_rate directly - audio is already resampled
 
         outputs = base_processor(**kwargs)
-        ordered_groups.append((sub, outputs))
+        out_list.append(outputs)
+        order.extend(sub)
 
     outputs = {}
-    if ordered_groups:
-        ordered_groups = sorted(ordered_groups, key=lambda t: t[0][0] if len(t[0]) > 0 else -1)
-        outputs = _merge_group_outputs(ordered_groups, total_batch_size=len(texts))
+    if out_list:
+        merged = {}
+        for out in out_list:
+            for k, v in out.items():
+                merged.setdefault(k, []).append(v)
+        for k, chunks in merged.items():
+            if isinstance(chunks[0], torch.Tensor):
+                outputs[k] = torch.cat(chunks, dim=0)
+            else:
+                tmp = []
+                for c in chunks:
+                    tmp.extend(c)
+                outputs[k] = tmp
+
+        inv = torch.empty(len(order), dtype=torch.long)
+        for pos, idx in enumerate(order):
+            inv[idx] = pos
+        for k, v in list(outputs.items()):
+            if isinstance(v, torch.Tensor) and v.size(0) == len(order):
+                outputs[k] = v.index_select(0, inv.to(v.device))
 
     if "audio_attention_mask" in outputs and "feature_attention_mask" not in outputs:
         outputs["feature_attention_mask"] = outputs.pop("audio_attention_mask")
@@ -1408,6 +1298,8 @@ def NVOmni_process_fn(model_inputs: dict, processor, max_length=None):
             return str(value)
         return value
 
+    documents_texts = [_normalize_chat_text(_apply_chat_template(doc)) for doc in documents]
+
     def _unwrap_single(x):
         if x is None:
             return None
@@ -1415,109 +1307,76 @@ def NVOmni_process_fn(model_inputs: dict, processor, max_length=None):
             return x[0]
         return x
 
-    sample_records = []
+    batch_audios, batch_images, batch_videos = [], [], []
     for doc in documents:
-        text = _normalize_chat_text(_apply_chat_template(doc))
         a_i, i_i, v_i = _process_mm_info(doc, use_audio_in_video=False)
-        aud = _unwrap_single(a_i)
-        img = _unwrap_single(i_i)
-        vid = v_i
-        sig = (img is not None, vid is not None, aud is not None)
-        sample_records.append({
-            "text": text,
-            "audio": aud,
-            "image": img,
-            "video": vid,
-            "sig": sig,
-        })
+        batch_audios.append(_unwrap_single(a_i))
+        batch_images.append(_unwrap_single(i_i))
+        # Keep videos as-is (likely list of frames per sample).
+        batch_videos.append(v_i)
 
-    def _call_processor_for_group(records):
-        texts_g = [r["text"] for r in records]
-        images_g = [r["image"] for r in records]
-        videos_g = [r["video"] for r in records]
-        audios_g = [r["audio"] for r in records]
+    def _drop_if_any_none(items):
+        if items is None:
+            return None
+        if len(items) == 0:
+            return None
+        if any(x is None for x in items):
+            return None
+        return items
 
-        has_images = records[0]["sig"][0]
-        has_videos = records[0]["sig"][1]
-        has_audios = records[0]["sig"][2]
-        assert all(r["sig"] == records[0]["sig"] for r in records)
+    audios = _drop_if_any_none(batch_audios)
+    images = _drop_if_any_none(batch_images)
+    videos = _drop_if_any_none(batch_videos)
 
-        if has_images:
-            assert all(x is not None for x in images_g)
+    # Qwen2.5 Omni image processor requires a uniform list shape:
+    # either list[PIL] or list[list[PIL]] for the whole batch.
+    if images is not None:
+        if any(isinstance(x, list) for x in images):
+            images = [x if isinstance(x, list) else [x] for x in images]
+
+    # Text-only batches can be very long; cap to avoid OOM.
+    if images is None and videos is None and audios is None:
+        if max_length is None:
+            text_max_length = 2048
         else:
-            assert all(x is None for x in images_g)
-        if has_videos:
-            assert all(x is not None for x in videos_g)
-        else:
-            assert all(x is None for x in videos_g)
-        if has_audios:
-            assert all(x is not None for x in audios_g)
-        else:
-            assert all(x is None for x in audios_g)
-        if has_images and has_videos:
-            raise ValueError("NVOmni_process_fn: cannot mix images and videos in one group.")
+            text_max_length = min(int(max_length), 2048)
+    else:
+        text_max_length = int(max_length) if max_length is not None else 204800
 
-        # Qwen2.5 Omni image processor requires a uniform list shape.
-        if has_images and any(isinstance(x, list) for x in images_g):
-            images_g = [x if isinstance(x, list) else [x] for x in images_g]
+    text_kwargs = {
+        "truncation": True,
+        "padding": True,
+        "max_length": text_max_length,
+    }
+    videos_kwargs = {
+        "min_pixels": 32 * 14 * 14,
+        "max_pixels": 64 * 28 * 28,
+        "use_audio_in_video": False,
+    }
+    images_kwargs = {
+        "min_pixels": 32 * 14 * 14,
+        "max_pixels": 64 * 28 * 28,
+    }
+    audio_kwargs = {"max_length": 2048000}
+    if audio_sample_rate is not None:
+        audio_kwargs["sampling_rate"] = int(audio_sample_rate)
 
-        # Text-only groups can use shorter caps to avoid OOM.
-        if not has_images and not has_videos and not has_audios:
-            if max_length is None:
-                text_max_length = 2048
-            else:
-                text_max_length = min(int(max_length), 2048)
-        else:
-            text_max_length = int(max_length) if max_length is not None else 204800
+    mm_kwargs = {
+        "return_tensors": "pt",
+        "text_kwargs": text_kwargs,
+        "videos_kwargs": videos_kwargs,
+        "images_kwargs": images_kwargs,
+    }
+    if audios is not None:
+        mm_kwargs["audio_kwargs"] = audio_kwargs
+    if images is not None:
+        mm_kwargs["images"] = images
+    if videos is not None:
+        mm_kwargs["videos"] = videos
+    if audios is not None:
+        mm_kwargs["audio"] = audios
 
-        text_kwargs = {
-            "truncation": True,
-            "padding": True,
-            "max_length": text_max_length,
-        }
-        videos_kwargs = {
-            "min_pixels": 32 * 14 * 14,
-            "max_pixels": 64 * 28 * 28,
-            "use_audio_in_video": False,
-        }
-        images_kwargs = {
-            "min_pixels": 32 * 14 * 14,
-            "max_pixels": 64 * 28 * 28,
-        }
-        audio_kwargs = {"max_length": 2048000}
-        if audio_sample_rate is not None:
-            audio_kwargs["sampling_rate"] = int(audio_sample_rate)
-
-        mm_kwargs = {
-            "return_tensors": "pt",
-            "text_kwargs": text_kwargs,
-            "videos_kwargs": videos_kwargs,
-            "images_kwargs": images_kwargs,
-        }
-        if has_images:
-            mm_kwargs["images"] = images_g
-        if has_videos:
-            mm_kwargs["videos"] = videos_g
-        if has_audios:
-            mm_kwargs["audio_kwargs"] = audio_kwargs
-            mm_kwargs["audio"] = audios_g
-
-        return processor(text=texts_g, **mm_kwargs)
-
-    groups = defaultdict(list)  # sig -> list[(orig_i, record)]
-    for i, r in enumerate(sample_records):
-        groups[r["sig"]].append((i, r))
-
-    group_outs = {}
-    for sig, items in groups.items():
-        records = [r for _, r in items]
-        out = _call_processor_for_group(records)
-        group_outs[sig] = (items, out)
-
-    # Merge group outputs back to original sample order.
-    B = len(sample_records)
-    ordered_groups = sorted(group_outs.values(), key=lambda t: t[0][0][0] if len(t[0]) > 0 else -1)
-    inputs = _merge_group_outputs(ordered_groups, total_batch_size=B)
+    inputs = processor(text=documents_texts, **mm_kwargs)
 
     feats = inputs.get("input_features", None)
     fam = inputs.get("feature_attention_mask", None)

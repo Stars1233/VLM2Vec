@@ -14,8 +14,10 @@ def data_prepare(batch_dict, *args, **kwargs):
     image_root = kwargs['image_root']
 
     query_texts, query_images, cand_texts, cand_images, dataset_infos = [], [], [], [], []
+    n = len(batch_dict['qry_text'])
+    qry_insts = batch_dict['qry_inst'] if 'qry_inst' in batch_dict else [""] * n
     for qry_inst, qry_text, qry_img_path, tgt_texts in (
-            zip(batch_dict['qry_inst'], batch_dict['qry_text'], batch_dict['qry_img_path'], batch_dict['tgt_text'])):
+            zip(qry_insts, batch_dict['qry_text'], batch_dict['qry_img_path'], batch_dict['tgt_text'])):
         qry_inst = qry_inst.replace("<|image_1|>", "")
         qry_text = process_input_text(qry_inst, model_backbone, text=qry_text, add_image_token=True)
         # to stay consistent with v1 eval
@@ -25,6 +27,7 @@ def data_prepare(batch_dict, *args, **kwargs):
         query_images.append([{"bytes": [None], "paths": [qry_img_path],
                             "resolutions": [RESOLUTION_MAPPING.get(image_resolution, None)]}])
 
+        tgt_texts = list(tgt_texts)
         cand_texts.append(tgt_texts)
         cand_images.append([None] * len(tgt_texts))
         dataset_infos.append({

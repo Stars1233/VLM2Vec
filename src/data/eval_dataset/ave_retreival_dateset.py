@@ -1,4 +1,5 @@
 import os
+import subprocess
 from typing import List, Dict, Any, Tuple
 
 import datasets
@@ -19,6 +20,65 @@ from src.model.processor import process_input_text
 
 
 TASK_INST_TGT = "Understand the content of the provided video."
+
+
+def _resolve_existing_dir(candidates: List[str]) -> str:
+    for c in candidates:
+        if c and os.path.isdir(c):
+            return c
+    return ""
+
+
+def _case_variants(path: str) -> List[str]:
+    if not path:
+        return []
+    variants = [path]
+    variants.append(path.replace("/audio-tasks/AVE/", "/audio-tasks/ave/"))
+    variants.append(path.replace("/audio-tasks/ave/", "/audio-tasks/AVE/"))
+    variants.append(path.replace("/audio-tasks/AVE", "/audio-tasks/ave"))
+    variants.append(path.replace("/audio-tasks/ave", "/audio-tasks/AVE"))
+    dedup = []
+    seen = set()
+    for p in variants:
+        if p not in seen:
+            seen.add(p)
+            dedup.append(p)
+    return dedup
+
+
+def _audio_filename(video_id: str, clip_id: str) -> str:
+    return f"{video_id}_{clip_id}.wav"
+
+
+def _extract_clip_audio_ffmpeg(video_path: str, start: float, end: float, out_wav: str) -> bool:
+    if os.path.isfile(out_wav):
+        return True
+    os.makedirs(os.path.dirname(out_wav), exist_ok=True)
+    duration = max(float(end) - float(start), 0.05)
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-ss",
+        str(float(start)),
+        "-t",
+        str(duration),
+        "-i",
+        video_path,
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        out_wav,
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        return False
+    return os.path.isfile(out_wav)
 
 
 def _parse_split_file(split_file: str) -> List[Dict[str, Any]]:
@@ -154,30 +214,45 @@ def load_ave_retrieval_dataset(model_args, data_args, **kwargs):
         audio_root: 音频文件根目录，默认 {data_path}/audios
         video_root: 视频文件根目录，默认 {data_path}/AVE
     """
-    data_path = kwargs.get(
+    data_path_input = kwargs.get(
         "data_path", os.path.join(BASE_RAW_DATA_DIR, "audio-tasks", "AVE", "AVE_Dataset")
     )
+    data_path = _resolve_existing_dir(
+        _case_variants(data_path_input)
+        + [os.path.join(BASE_RAW_DATA_DIR, "audio-tasks", "ave", "AVE", "AVE_Dataset")]
+    )
+    if not data_path:
+        raise AssertionError(
+            f"AVE data_path not found. tried={_case_variants(data_path_input) + [os.path.join(BASE_RAW_DATA_DIR, 'audio-tasks', 'ave', 'AVE', 'AVE_Dataset')]}"
+        )
+
     split_file = kwargs.get("split_file", "testSet.txt")
-    audio_root = kwargs.get("audio_root", os.path.join(data_path, "audios"))
-    video_root = kwargs.get("video_root", os.path.join(data_path, "AVE"))
+    video_root_input = kwargs.get("video_root", os.path.join(data_path, "AVE"))
+    video_root = _resolve_existing_dir(_case_variants(video_root_input) + [os.path.join(data_path, "AVE")])
+
+    # Prefer configured audio_root if valid. If missing/empty, we will extract clips from mp4.
+    audio_root_input = kwargs.get("audio_root", os.path.join(data_path, "audios"))
+    resolved_audio_root = _resolve_existing_dir(_case_variants(audio_root_input))
+    use_precomputed_audio = bool(resolved_audio_root)
+    audio_root = resolved_audio_root if resolved_audio_root else audio_root_input
+    if not audio_root:
+        audio_root = os.path.join(data_path, "audios_extracted_16k")
+    os.makedirs(audio_root, exist_ok=True)
 
     split_path = os.path.join(data_path, split_file)
     assert os.path.isfile(split_path), f"AVE split file not found: {split_path}"
-    assert os.path.isdir(audio_root), f"Audio directory not found: {audio_root}"
     assert os.path.isdir(video_root), f"Video directory not found: {video_root}"
 
     samples = _parse_split_file(split_path)
-
-    # ✅ 先过滤缺失音频/视频，避免后续 decode 和对齐问题
-    filtered = []
+    # 先过滤缺失视频（音频缺失时可走抽取）
+    video_filtered = []
     for s in samples:
-        audio_path = os.path.join(audio_root, f"{s['video_id']}_{s['clip_id']}.wav")  # ✅ FIX
         video_path = os.path.join(video_root, f"{s['video_id']}.mp4")
-        if os.path.isfile(audio_path) and os.path.isfile(video_path):
-            filtered.append(s)
-    samples = filtered
+        if os.path.isfile(video_path):
+            video_filtered.append(s)
+    samples = video_filtered
 
-    # 1) 采样（放在过滤之后，才不会不对齐）
+    # 采样（放在音频处理前，可显著减少抽取开销）
     max_samples = kwargs.get("max_samples", None)
     seed = kwargs.get("seed", 17)
     if max_samples is not None and max_samples < len(samples):
@@ -185,10 +260,35 @@ def load_ave_retrieval_dataset(model_args, data_args, **kwargs):
         random.seed(seed)
         samples = random.sample(samples, max_samples)
 
+    filtered = []
+    missing_audio = 0
+    extract_failed = 0
+    for s in samples:
+        video_path = os.path.join(video_root, f"{s['video_id']}.mp4")
+        audio_path = os.path.join(audio_root, _audio_filename(s["video_id"], s["clip_id"]))
+        if use_precomputed_audio:
+            if not os.path.isfile(audio_path):
+                missing_audio += 1
+                continue
+        else:
+            ok = _extract_clip_audio_ffmpeg(video_path, s["start"], s["end"], audio_path)
+            if not ok:
+                extract_failed += 1
+                continue
+        s = dict(s)
+        s["audio_path"] = audio_path
+        filtered.append(s)
+    samples = filtered
+    assert len(samples) > 0, (
+        f"AVE has no valid samples after filtering. "
+        f"use_precomputed_audio={use_precomputed_audio}, missing_audio={missing_audio}, extract_failed={extract_failed}, "
+        f"video_root={video_root}, audio_root={audio_root}"
+    )
+
     # 构造 HF Dataset
     # 构造音频文件路径（对齐 samples）
     audio_files = [
-        os.path.join(audio_root, f"{s['video_id']}_{s['clip_id']}.wav")
+        s["audio_path"]
         for s in samples
     ]
 

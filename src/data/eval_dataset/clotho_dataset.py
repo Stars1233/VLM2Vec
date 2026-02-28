@@ -19,9 +19,13 @@ def _expand_clotho_rows(csv_path: str, audio_dir: str) -> List[Dict[str, str]]:
     """将 Clotho CSV 每行展开为 5 条 (text, audio_path)。"""
     df = pd.read_csv(csv_path)
     records: List[Dict[str, str]] = []
+    missing_audio = 0
     for _, row in df.iterrows():
         file_name = row["file_name"]
         audio_path = os.path.join(audio_dir, file_name)
+        if not os.path.isfile(audio_path):
+            missing_audio += 1
+            continue
         for i in range(1, 6):
             cap = row.get(f"caption_{i}")
             if not isinstance(cap, str):
@@ -33,7 +37,61 @@ def _expand_clotho_rows(csv_path: str, audio_dir: str) -> List[Dict[str, str]]:
                     "file_name": file_name,
                 }
             )
+    if missing_audio > 0:
+        print_master(f"[Clotho] skipped {missing_audio} rows due to missing audio files under: {audio_dir}")
     return records
+
+
+def _resolve_clotho_paths(
+    data_path: str,
+    captions_csv: str | None,
+    audio_subdir: str | None,
+) -> Tuple[str, str]:
+    csv_candidates: List[str] = []
+    if captions_csv:
+        csv_candidates.append(captions_csv)
+    csv_candidates.extend(
+        [
+            "clotho_captions_evaluation.csv",
+            "clotho_captions_development.csv",
+        ]
+    )
+
+    audio_candidates: List[str] = []
+    if audio_subdir:
+        audio_candidates.append(audio_subdir)
+    audio_candidates.extend(
+        [
+            "evaluation",
+            "clotho/evaluation",
+            "development",
+            "clotho/development",
+        ]
+    )
+
+    csv_path = None
+    for c in csv_candidates:
+        p = c if os.path.isabs(c) else os.path.join(data_path, c)
+        if os.path.isfile(p):
+            csv_path = p
+            break
+
+    audio_dir = None
+    for c in audio_candidates:
+        p = c if os.path.isabs(c) else os.path.join(data_path, c)
+        if os.path.isdir(p):
+            audio_dir = p
+            break
+
+    if csv_path is None:
+        raise AssertionError(
+            f"未找到 Clotho caption CSV。data_path={data_path}, tried={csv_candidates}"
+        )
+    if audio_dir is None:
+        raise AssertionError(
+            f"未找到 Clotho 音频目录。data_path={data_path}, tried={audio_candidates}"
+        )
+    return csv_path, audio_dir
 
 
 def build_clotho_text_audio_dataset(path_info: Tuple[str, str, str], **kwargs):
@@ -43,15 +101,12 @@ def build_clotho_text_audio_dataset(path_info: Tuple[str, str, str], **kwargs):
     - corpus_dataset: 包含所有候选，每个条目一个候选
     """
     data_path = path_info[0]
-    captions_csv: str = kwargs.get("captions_csv", "clotho_captions_evaluation.csv")
-    audio_subdir: str = kwargs.get("audio_subdir", "evaluation")
-
-    csv_path = os.path.join(data_path, captions_csv)
-    audio_dir = os.path.join(data_path, audio_subdir)
-    assert os.path.isfile(csv_path), f"未找到 caption CSV: {csv_path}"
-    assert os.path.isdir(audio_dir), f"未找到音频目录: {audio_dir}"
+    captions_csv: str | None = kwargs.get("captions_csv", None)
+    audio_subdir: str | None = kwargs.get("audio_subdir", None)
+    csv_path, audio_dir = _resolve_clotho_paths(data_path, captions_csv, audio_subdir)
 
     records = _expand_clotho_rows(csv_path, audio_dir)
+    assert len(records) > 0, f"[Clotho] 无可用样本。csv={csv_path}, audio_dir={audio_dir}"
     # 构造候选池与映射
     file_names = [r["file_name"] for r in records]
     unique_files = list(dict.fromkeys(file_names))  # 保持顺序去重

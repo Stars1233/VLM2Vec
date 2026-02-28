@@ -21,3 +21,4 @@ datasets/
 core.*
 Environment
 exps/
+*.whl

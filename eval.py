@@ -358,7 +358,16 @@ def main():
         if do_query or do_cand:
             if data_args.data_basedir is not None:
                 # Construct full paths for data files if --data_basedir is provided
-                for key in ["image_root", "video_root", "frame_root", "clip_root", "data_path"]:
+                for key in [
+                    "image_root",
+                    "video_root",
+                    "frame_root",
+                    "clip_root",
+                    "audio_root",
+                    "data_path",
+                    "query_file",
+                    "candidate_file",
+                ]:
                     if data_args.data_basedir and task_config.get(key):
                         task_config[key] = os.path.join(data_args.data_basedir, task_config[key])
 

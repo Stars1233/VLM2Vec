@@ -5,7 +5,10 @@ from typing import Optional, Dict, Any
 from transformers import ProcessorMixin, AutoProcessor, AutoTokenizer
 from src.arguments import DataArguments, ModelArguments
 import torch
-from qwen_vl_utils import smart_resize
+try:
+    from qwen_vl_utils import smart_resize
+except ImportError:
+    from src.model.vlm_backbone.qwen2_vl.qwen_vl_utils import smart_resize
 from PIL import Image
 import torchaudio
 from src.model.processor import (
@@ -377,6 +380,12 @@ class MultimodalEvalDataCollator:
                         wav = wav[:max_audio_samples]
                 return wav
 
+            def _safe_resample(wav: torch.Tensor, src_sr: int, dst_sr: int) -> torch.Tensor:
+                # torchaudio.functional.resample 会在空 waveform 上报错
+                if wav is None or wav.numel() == 0 or src_sr == dst_sr:
+                    return wav
+                return torchaudio.functional.resample(wav, src_sr, dst_sr)
+
             audio_tensors = []
             for audio_item in inputs["audios"]:
                 if audio_item is None:
@@ -390,8 +399,7 @@ class MultimodalEvalDataCollator:
                     wav = torch.tensor(arr, dtype=torch.float32)
                     if wav.ndim > 1:
                         wav = wav.mean(0)
-                    if sr != target_sr:
-                        wav = torchaudio.functional.resample(wav, sr, target_sr)
+                    wav = _safe_resample(wav, sr, target_sr)
                     audio_tensors.append(_crop_audio(wav))
                     continue
 
@@ -406,7 +414,11 @@ class MultimodalEvalDataCollator:
                 # 3) dict path/bytes (+ optional start/end)
                 if isinstance(audio_item, dict):
                     a_path = audio_item.get("path") or audio_item.get("audio_path") or audio_item.get("video_path")
-                    if a_path is not None and not os.path.isabs(a_path):
+                    if (
+                        a_path is not None
+                        and not os.path.isabs(a_path)
+                        and getattr(self.data_args, "data_basedir", None) is not None
+                    ):
                         a_path = os.path.join(self.data_args.data_basedir, a_path)
                     a_bytes = audio_item.get("bytes", None)
                     start_t = float(audio_item.get("start", 0.0))
@@ -417,16 +429,28 @@ class MultimodalEvalDataCollator:
                     elif a_path:
                         info = torchaudio.info(a_path)
                         sr = info.sample_rate
-                        frame_offset = int(start_t * sr)
-                        num_frames = int((float(end_t) - start_t) * sr) if end_t is not None else -1
+                        total_frames = int(getattr(info, "num_frames", 0) or 0)
+                        frame_offset = max(0, int(start_t * sr))
+                        if total_frames > 0:
+                            frame_offset = min(frame_offset, max(0, total_frames - 1))
+
+                        if end_t is not None:
+                            seg_frames = int((float(end_t) - start_t) * sr)
+                            # 兜底：处理 end<=start 或浮点误差导致的 0 长度片段
+                            num_frames = max(1, seg_frames)
+                            if total_frames > 0:
+                                remain = max(1, total_frames - frame_offset)
+                                num_frames = min(num_frames, remain)
+                        else:
+                            num_frames = -1
+
                         wave, _ = torchaudio.load(a_path, frame_offset=frame_offset, num_frames=num_frames)
                     else:
                         raise ValueError("audio item missing array/path/bytes")
 
                     if wave.dim() > 1:
                         wave = wave.mean(0)
-                    if sr != target_sr:
-                        wave = torchaudio.functional.resample(wave, sr, target_sr)
+                    wave = _safe_resample(wave, sr, target_sr)
                     audio_tensors.append(_crop_audio(wave))
                     continue
 

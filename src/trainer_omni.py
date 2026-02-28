@@ -19,6 +19,7 @@ import shutil
 from functools import partial
 from typing import Any, Dict, Optional, List
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -313,6 +314,12 @@ class OmniEmbedder(nn.Module):
         for key in ("input_features", "feature_attention_mask", "audio_feature_lengths"):
             if key in inputs:
                 inputs[key] = _stack_with_fill(inputs[key])
+
+        # Some processor paths return batched numpy arrays (especially audio masks).
+        # Convert them to tensors before shape checks / model forward.
+        for k, v in list(inputs.items()):
+            if isinstance(v, np.ndarray) and v.dtype != np.object_:
+                inputs[k] = torch.as_tensor(v)
 
         if isinstance(inputs.get("input_features"), torch.Tensor) and isinstance(inputs.get("feature_attention_mask"), torch.Tensor):
             feat_t = inputs["input_features"].shape[-1]

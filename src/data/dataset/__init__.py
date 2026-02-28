@@ -20,3 +20,4 @@ from .audio_ave_dateset import load_audio_ave_dataset
 from .audio_clotho_dataset import load_audio_clotho_dataset
 from .audio_urbansound_dataset import load_audio_urbansound8k_dataset
 from .tutsound_dataset import build_tutsound_audio_dataset
+from .speechcoco_dataset import load_audio_speechcoco_dataset

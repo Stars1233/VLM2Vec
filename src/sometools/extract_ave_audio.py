@@ -67,7 +67,7 @@ def main():
     print("Starting main function")
     parser = argparse.ArgumentParser(description="Extract audio segments from AVE dataset videos")
     parser.add_argument("--data_path", type=str,
-                       default="/code/.cache/datasets/MMEB-v2_1/audio-tasks/AVE",
+                       default="/data/mengrui/.cache/huggingface/datasets/MMEB-V3/audio-tasks/ave/AVE",
                        help="AVE数据集根目录")
     parser.add_argument("--split_file", type=str, default="testSet.txt",
                        help="分割文件 (testSet.txt, trainSet.txt, valSet.txt)")

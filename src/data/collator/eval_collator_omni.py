@@ -387,7 +387,8 @@ class OmniEvalAutoProcessorCollator:
             c_sig = self._sig(c_imgs[i], c_vids[i], c_wavs[i]) if c_imgs else (False, False, False)
             groups.setdefault((q_sig, c_sig), []).append(i)
 
-        max_len = int(getattr(self.data_args, "max_len", 256))
+        raw_max_len = getattr(self.data_args, "max_len", None)
+        max_len = 256 if raw_max_len is None else int(raw_max_len)
 
         def _merge(out_list: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
             # Ensure missing batch-first keys are filled so batch dims align.

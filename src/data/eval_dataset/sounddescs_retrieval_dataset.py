@@ -1,270 +1,338 @@
 """
 SoundDescs 文本 -> 音频 检索评测数据集：
-- 文本 -> 音频 检索数据处理（供评测路由调用）。
-- query: text
-- candidates: 全部音频池（同 split）
-- label_cand_id: 正例音频在 cand_audio 中的索引
+- query 仅保留 query_* 与 label 信息
+- candidates 通过 corpus 单独返回，避免在 query 行重复拷贝整个候选池
 """
 
 import glob
 import os
-from typing import Any, Dict, List, Tuple, Optional
+from itertools import chain
+from typing import Any, Dict, List, Optional, Tuple
 
 import datasets
 
 from src.constant.dataset_hf_path import EVAL_DATASET_HF_PATH
 from src.constant.dataset_hflocal_path import EVAL_DATASET_HF_PATH as EVAL_DATASET_LOCAL_PATH
+from src.data.eval_dataset.audio_instruction_utils import build_query_text
 from src.data.eval_dataset.base_eval_dataset import AutoEvalPairDataset
 from src.utils.dataset_utils import load_qrels_mapping, sample_dataset
-from src.data.eval_dataset.audio_instruction_utils import build_query_text
 
 
-# -------------------------
-# ✅ 新 parquet 已经 flatten：
-#   corpus: corpus-id, audio_path, audio_bytes (可能还有 id)
-#   query : query-id + 原字段（text/caption/sentence/query/...）
-#   qrels : query-id, corpus-id, score
-# -------------------------
+def _extract_audio_obj(row: Dict[str, Any], keep_audio_bytes: bool) -> Dict[str, Any]:
+    """从扁平列或嵌套 audio 字段提取音频对象。"""
+    # 优先扁平列
+    path = row.get("audio_path") or row.get("path")
+    bytes_data = row.get("audio_bytes")
 
-
-def _extract_audio_obj(row: Dict[str, Any]) -> Dict[str, Any]:
-    """处理嵌套audio结构或扁平列"""
-    # 首先尝试从扁平列获取（预处理后的数据）
-    if "audio_path" in row or "audio_bytes" in row:
-        return {
-            "path": row.get("audio_path") or row.get("path"),
-            "bytes": row.get("audio_bytes"),
-        }
-
-    # 处理嵌套audio结构
-    if "audio" in row and isinstance(row["audio"], dict):
+    # 嵌套结构回退
+    if path is None and "audio" in row and isinstance(row["audio"], dict):
         audio_struct = row["audio"]
-        return {
-            "path": audio_struct.get("path"),
-            "bytes": audio_struct.get("bytes"),
-        }
+        path = audio_struct.get("path") or path
+        bytes_data = audio_struct.get("bytes") if bytes_data is None else bytes_data
 
-    # 回退到path字段
-    return {
-        "path": row.get("path"),
-        "bytes": None,
-    }
+    # 默认优先使用 path，避免把超大 bytes 载入/复制到中间结构
+    if path is not None:
+        return {"path": path, "bytes": (bytes_data if keep_audio_bytes else None)}
+
+    return {"path": None, "bytes": bytes_data}
+
+
+def _resolve_audio_path(
+    raw_path: Optional[str],
+    dataset_path: str,
+    audio_root: Optional[str],
+) -> Optional[str]:
+    if not raw_path:
+        return None
+
+    candidates: List[str] = []
+    if os.path.isabs(raw_path):
+        candidates.append(raw_path)
+    else:
+        if audio_root:
+            candidates.append(os.path.join(audio_root, raw_path))
+        candidates.append(os.path.join(dataset_path, raw_path))
+        candidates.append(os.path.join(dataset_path, "eval", raw_path))
+
+    for p in candidates:
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def _materialize_audio_bytes(audio_bytes: bytes, out_path: str):
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    if not os.path.isfile(out_path):
+        with open(out_path, "wb") as f:
+            f.write(audio_bytes)
 
 
 def _extract_text(row: Dict[str, Any]) -> str:
-    """从 query 行里抽文本（字段名不固定）"""
     for key in ["text", "caption", "sentence", "query"]:
-        v = row.get(key, None)
-        if isinstance(v, str) and v.strip():
-            return v
-    for v in row.values():
-        if isinstance(v, str) and v.strip():
-            return v
+        value = row.get(key, None)
+        if isinstance(value, str) and value.strip():
+            return value
+    for value in row.values():
+        if isinstance(value, str) and value.strip():
+            return value
     raise ValueError(f"No text field found. keys={list(row.keys())}")
 
 
-def _load_parquet_stream(
-    pattern: str,
-    columns: Optional[List[str]] = None,
-):
+def _load_parquet_stream(pattern: str, columns: Optional[List[str]] = None):
     files = sorted(glob.glob(pattern))
     if not files:
         raise FileNotFoundError(f"No parquet files matched: {pattern}")
 
-    kw = dict(
-        path="parquet",
-        data_files={"data": files},
-        streaming=True,
-    )
-    # 移除columns参数，让datasets自动处理嵌套结构
-    # if columns is not None:
-    #     kw["columns"] = columns
+    kw = {
+        "path": "parquet",
+        "data_files": {"data": files},
+        "streaming": True,
+    }
+    if columns is not None:
+        kw["columns"] = columns
 
-    return datasets.load_dataset(**kw)["data"]
+    try:
+        return datasets.load_dataset(**kw)["data"]
+    except Exception:
+        if columns is None:
+            raise
+        # 某些旧数据可能不支持列裁剪（尤其包含嵌套列），回退为全列读取
+        kw.pop("columns", None)
+        return datasets.load_dataset(**kw)["data"]
 
 
-def _prepare_corpus(dataset_path: str) -> Tuple[List[List[Dict[str, Any]]], Dict[str, int], List[str]]:
-    # 兼容：sounddescs-1k 的数据在 eval/ 下（你的重建脚本就是这样）
+def _get_data_pattern(dataset_path: str, name: str) -> str:
     if "-1k" in dataset_path:
-        corpus_pattern = os.path.join(dataset_path, "eval", "corpus*.parquet")
-    else:
-        corpus_pattern = os.path.join(dataset_path, "corpus", "*.parquet")
+        return os.path.join(dataset_path, "eval", f"{name}*.parquet")
+    return os.path.join(dataset_path, name, "*.parquet")
 
-    # 读取所有列，包括嵌套的audio结构
-    corpus_stream = _load_parquet_stream(
-        corpus_pattern,
-        columns=None,  # 读取所有列以处理嵌套结构
-    )
 
-    cand_audio_pool: List[List[Dict[str, Any]]] = []
+def _prepare_corpus(
+    dataset_path: str,
+    keep_audio_bytes: bool,
+    required_cids: Optional[set],
+    audio_root: Optional[str],
+    materialize_missing_audio: bool,
+    audio_cache_dir: Optional[str],
+) -> Tuple[datasets.Dataset, Dict[str, int], List[str]]:
+    corpus_pattern = _get_data_pattern(dataset_path, "corpus")
+
+    # 默认尽量只读轻量列，避免把 audio_bytes 整体扫入内存
+    preferred_columns = ["corpus-id", "id", "audio_path", "path"]
+    need_audio_bytes = keep_audio_bytes or materialize_missing_audio
+    if need_audio_bytes:
+        preferred_columns.append("audio_bytes")
+    corpus_stream = _load_parquet_stream(corpus_pattern, columns=preferred_columns)
+
+    iterator = iter(corpus_stream)
+    first_row = next(iterator, None)
+    if first_row is None:
+        raise ValueError(f"Empty corpus parquet: {corpus_pattern}")
+
+    # 如果列裁剪后拿不到 path/bytes，则回退到全列读取（兼容嵌套 audio）
+    first_audio = _extract_audio_obj(first_row, keep_audio_bytes=need_audio_bytes)
+    if first_audio["path"] is None and first_audio["bytes"] is None:
+        corpus_stream = _load_parquet_stream(corpus_pattern, columns=None)
+        iterator = iter(corpus_stream)
+        first_row = next(iterator, None)
+        if first_row is None:
+            raise ValueError(f"Empty corpus parquet after fallback: {corpus_pattern}")
+
+    rows = chain([first_row], iterator)
+    seen_cids = set()
     cand_names: List[str] = []
+    corpus_rows: List[Dict[str, Any]] = []
 
-    for row in corpus_stream:
-        audio_obj = _extract_audio_obj(row)
-        # 优先使用corpus-id，然后是id，最后使用path
+    for row in rows:
         cid = row.get("corpus-id") or row.get("id")
+        audio_obj = _extract_audio_obj(row, keep_audio_bytes=need_audio_bytes)
         if cid is None and audio_obj.get("path"):
-            # 从path中提取文件名作为id
-            # (REMOVE) do not import/rebind os inside this function; use the global import at file top
             cid = os.path.splitext(os.path.basename(audio_obj["path"]))[0]
-        cid = str(cid)
+        if cid is None:
+            raise ValueError(f"Corpus row has no candidate id. keys={list(row.keys())}")
 
+        cid = str(cid)
+        if required_cids is not None and cid not in required_cids:
+            continue
+
+        if cid in seen_cids:
+            continue
+
+        resolved_path = _resolve_audio_path(
+            raw_path=audio_obj.get("path"),
+            dataset_path=dataset_path,
+            audio_root=audio_root,
+        )
+        audio_bytes = audio_obj.get("bytes")
+        final_audio: Dict[str, Any]
+        if resolved_path is not None:
+            final_audio = {"path": resolved_path, "bytes": (audio_bytes if keep_audio_bytes else None)}
+        elif materialize_missing_audio and audio_bytes is not None:
+            out_dir = audio_cache_dir or os.path.join(dataset_path, "audio_cache")
+            raw_name = os.path.basename(audio_obj.get("path") or "")
+            ext = os.path.splitext(raw_name)[1] if raw_name else ".wav"
+            filename = f"{cid}{ext or '.wav'}"
+            out_path = os.path.join(out_dir, filename)
+            _materialize_audio_bytes(audio_bytes, out_path)
+            final_audio = {"path": out_path, "bytes": (audio_bytes if keep_audio_bytes else None)}
+        elif keep_audio_bytes and audio_bytes is not None:
+            final_audio = {"path": None, "bytes": audio_bytes}
+        else:
+            raise FileNotFoundError(
+                f"SoundDescs audio is unavailable for cid={cid}: path={audio_obj.get('path')}. "
+                "Either provide local audio files (audio_root) or enable bytes fallback/materialization."
+            )
+
+        seen_cids.add(cid)
         cand_names.append(cid)
-        cand_audio_pool.append([audio_obj])
+
+        corpus_rows.append(
+            {
+                "cand_text": ["[AUDIO]"],
+                "cand_image": [None],
+                "cand_audio": [final_audio],
+                "dataset_infos": {"cand_names": [cid]},
+            }
+        )
+
+        if required_cids is not None and len(seen_cids) >= len(required_cids):
+            break
+
+    if not corpus_rows:
+        raise ValueError("No valid candidates found in SoundDescs corpus.")
 
     cand_id2idx = {cid: idx for idx, cid in enumerate(cand_names)}
-    return cand_audio_pool, cand_id2idx, cand_names
+    return datasets.Dataset.from_list(corpus_rows), cand_id2idx, cand_names
 
 
-def _prepare_queries(dataset_path: str, **kwargs):
-    if "-1k" in dataset_path:
-        query_pattern = os.path.join(dataset_path, "eval", "query*.parquet")
-    else:
-        query_pattern = os.path.join(dataset_path, "query", "*.parquet")
-
-    # query 不强制 columns：避免你文本字段名变化
+def _prepare_queries(dataset_path: str, **kwargs) -> datasets.Dataset:
+    query_pattern = _get_data_pattern(dataset_path, "query")
     queries_stream = _load_parquet_stream(query_pattern, columns=None)
-
-    # ✅ query 规模不大：stream -> list -> Dataset，然后 sample
-    queries_data = list(queries_stream)
-    queries_ds = datasets.Dataset.from_list(queries_data)
-    queries_ds = sample_dataset(queries_ds, **kwargs)
-    return queries_ds
+    queries_ds = datasets.Dataset.from_list(list(queries_stream))
+    return sample_dataset(queries_ds, **kwargs)
 
 
 def _load_qrels(dataset_path: str) -> Dict[str, Dict[str, int]]:
-    if "-1k" in dataset_path:
-        qrels_pattern = os.path.join(dataset_path, "eval", "qrels*.parquet")
-    else:
-        qrels_pattern = os.path.join(dataset_path, "qrels", "*.parquet")
-
-    # ✅ 标准三列即可
-    qrels_stream = _load_parquet_stream(qrels_pattern, columns=["query-id", "corpus-id", "score"])
-    qrels_data = list(qrels_stream)
-    qrels_ds = datasets.Dataset.from_list(qrels_data)
+    qrels_pattern = _get_data_pattern(dataset_path, "qrels")
+    qrels_stream = _load_parquet_stream(
+        qrels_pattern,
+        columns=["query-id", "corpus-id", "score"],
+    )
+    qrels_ds = datasets.Dataset.from_list(list(qrels_stream))
     return load_qrels_mapping(qrels_ds)
 
 
-def _data_prepare(batch: Dict[str, List[Any]], **kwargs):
-    """
-    ✅ 这里一定要只基于 `batch` 来构造输出，每个输出列长度必须 == batch_size
-    不能用全局 query_ids_batch / query_texts_batch，否则会出现长度错配（你之前的 256 vs 1000）
-    """
-    cand_audio_pool: List[List[Dict[str, Any]]] = kwargs["cand_audio_pool"]
-    cand_id2idx: Dict[str, int] = kwargs["cand_id2idx"]
-    cand_names: List[str] = kwargs["cand_names"]
-    qrels: Dict[str, Dict[str, int]] = kwargs["qrels"]
+def _collect_required_cids(
+    queries_ds: datasets.Dataset,
+    qrels: Dict[str, Dict[str, int]],
+) -> set:
+    required: set = set()
+    for row in queries_ds:
+        qid = _select_query_id(row)
+        rels = qrels.get(qid, {})
+        for cid, score in rels.items():
+            if score > 0:
+                required.add(str(cid))
+    return required
 
-    # ✅ 非空占位符：保证 tokenizer 至少有东西可编码
-    cand_text_placeholder = ["[AUDIO]"] * len(cand_names)
-    cand_image_placeholder = [None] * len(cand_names)
 
-    batch_size = len(batch[next(iter(batch))])
+def _select_query_id(row: Dict[str, Any]) -> str:
+    for key in ["query-id", "query_id", "id", "qid"]:
+        if key in row and row[key] is not None:
+            return str(row[key])
+    raise ValueError(f"Query row has no id fields. keys={list(row.keys())}")
 
-    out_query_text, out_query_image, out_query_audio = [], [], []
-    out_cand_text, out_cand_image, out_cand_audio, out_infos = [], [], [], []
 
-    for i in range(batch_size):
-        # 取 qid：你重建脚本写了 query-id
-        qid = None
-        for k in ["query-id", "query_id", "id", "qid"]:
-            if k in batch:
-                qid = batch[k][i]
-                break
-        if qid is None:
-            raise ValueError(f"Query batch has no id fields. keys={list(batch.keys())}")
-        qid = str(qid)
+def _build_query_dataset(
+    queries_ds: datasets.Dataset,
+    qrels: Dict[str, Dict[str, int]],
+    cand_id2idx: Dict[str, int],
+    cand_names: List[str],
+    include_cand_names: bool,
+) -> datasets.Dataset:
+    out_query_text: List[List[str]] = []
+    out_query_image: List[List[None]] = []
+    out_query_audio: List[None] = []
+    out_infos: List[Dict[str, Any]] = []
 
-        # 还原这一行的 dict，用于抽文本
-        row_i = {k: v[i] for k, v in batch.items()}
-        raw_text = _extract_text(row_i)
+    for row in queries_ds:
+        qid = _select_query_id(row)
+        raw_text = _extract_text(row)
         query_text = build_query_text("SoundDescs", raw_text)
-        assert isinstance(query_text, list) and len(query_text) == 1 and isinstance(query_text[0], str) and query_text[0].strip()
+        assert (
+            isinstance(query_text, list)
+            and len(query_text) == 1
+            and isinstance(query_text[0], str)
+            and query_text[0].strip()
+        )
 
         rels = qrels.get(qid, {})
         if rels:
-            rel_cid = max(rels.items(), key=lambda x: x[1])[0]
-            rel_cid = str(rel_cid)
+            rel_cid = str(max(rels.items(), key=lambda x: x[1])[0])
             label_idx = cand_id2idx.get(rel_cid, -1)
         else:
             rel_cid = None
             label_idx = -1
 
-        out_query_text.append(query_text)   # List[str] len=1
-        out_query_image.append([None])
-        out_query_audio.append(None)
-
-        # ✅ 关键：cand_text/cand_image/cand_names 必须同长度，否则框架后面会炸
-        out_cand_text.append(cand_text_placeholder)     # len == #cands
-        out_cand_image.append(cand_image_placeholder)   # len == #cands
-        out_cand_audio.append(cand_audio_pool)          # len == #cands
-
-        out_infos.append({
+        info = {
             "label_cand_id": label_idx,
             "query_id": qid,
             "corpus_id": rel_cid,
-            "cand_names": cand_names,  # ✅ 全量候选名（别再是 []）
-            "label_name": rel_cid,  # ✅ 添加 label_name 字段，使用 corpus_id 作为标签
-        })
+            "label_name": rel_cid,
+        }
+        if include_cand_names:
+            info["cand_names"] = cand_names
 
-    return {
-        "query_text": out_query_text,
-        "query_image": out_query_image,
-        "query_audio": out_query_audio,
-        "cand_text": out_cand_text,
-        "cand_image": out_cand_image,
-        "cand_audio": out_cand_audio,
-        "dataset_infos": out_infos,
-    }
+        out_query_text.append(query_text)
+        out_query_image.append([None])
+        out_query_audio.append(None)
+        out_infos.append(info)
+
+    return datasets.Dataset.from_dict(
+        {
+            "query_text": out_query_text,
+            "query_image": out_query_image,
+            "query_audio": out_query_audio,
+            "dataset_infos": out_infos,
+        }
+    )
 
 
 def build_sounddescs_text_audio_dataset(path_info: Tuple[str, str, str], **kwargs):
-    """
-    返回 (dataset, corpus) 供评测使用。corpus 为空（候选池随样本携带）。
-    """
     dataset_path = path_info[0]
 
-    cand_audio_pool, cand_id2idx, cand_names = _prepare_corpus(dataset_path)
+    keep_audio_bytes = bool(kwargs.get("keep_audio_bytes", False))
+    materialize_missing_audio = bool(kwargs.get("materialize_missing_audio", True))
+    audio_root = kwargs.get("audio_root", None)
+    audio_cache_dir = kwargs.get("audio_cache_dir", os.path.join(dataset_path, "audio_cache"))
+    eval_type = kwargs.get("eval_type", "local")
+    include_cand_names = eval_type != "global"
+
     qrels = _load_qrels(dataset_path)
     queries_ds = _prepare_queries(dataset_path, **kwargs)
+    required_cids = _collect_required_cids(queries_ds, qrels)
 
-    # ✅ 构造占位符，保证框架一致性检查通过
-    cand_text_placeholder = ["[AUDIO]"] * len(cand_names)
-    cand_image_placeholder = [None] * len(cand_names)
-
-    map_kwargs = dict(kwargs)
-    map_kwargs["cand_audio_pool"] = cand_audio_pool
-    map_kwargs["cand_id2idx"] = cand_id2idx
-    map_kwargs["cand_names"] = cand_names
-    map_kwargs["cand_text_placeholder"] = cand_text_placeholder
-    map_kwargs["cand_image_placeholder"] = cand_image_placeholder
-    map_kwargs["qrels"] = qrels
-
-    dataset = queries_ds.map(
-        lambda batch: _data_prepare(batch, **map_kwargs),
-        batched=True,
-        batch_size=256,
-        drop_last_batch=False,
-        load_from_cache_file=False,
+    corpus, cand_id2idx, cand_names = _prepare_corpus(
+        dataset_path,
+        keep_audio_bytes=keep_audio_bytes,
+        required_cids=required_cids,
+        audio_root=audio_root,
+        materialize_missing_audio=materialize_missing_audio,
+        audio_cache_dir=audio_cache_dir,
+    )
+    query_dataset = _build_query_dataset(
+        queries_ds=queries_ds,
+        qrels=qrels,
+        cand_id2idx=cand_id2idx,
+        cand_names=cand_names,
+        include_cand_names=include_cand_names,
     )
 
-    dataset = dataset.select_columns(
-        [
-            "query_text",
-            "query_image",
-            "query_audio",
-            "cand_text",
-            "cand_image",
-            "cand_audio",
-            "dataset_infos",
-        ]
+    query_dataset = query_dataset.select_columns(
+        ["query_text", "query_image", "query_audio", "dataset_infos"]
     )
-
-    corpus = None
-    return dataset, corpus
-
-
-DATASET_PARSER_NAME = "sounddescs_text_audio"
+    corpus = corpus.select_columns(["cand_text", "cand_image", "cand_audio", "dataset_infos"])
+    return query_dataset, corpus
 
 
 DATASET_PARSER_NAME = "sounddescs_text_audio"
@@ -276,5 +344,4 @@ def load_sounddescs_text_audio_dataset(model_args, data_args, **kwargs):
     path_info = EVAL_DATASET_LOCAL_PATH.get(dataset_name, EVAL_DATASET_HF_PATH.get(dataset_name))
     if path_info is None:
         raise ValueError(f"Unknown dataset_name={dataset_name}")
-
     return build_sounddescs_text_audio_dataset(path_info, **kwargs)

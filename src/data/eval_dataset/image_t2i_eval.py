@@ -15,8 +15,11 @@ def data_prepare(batch_dict, *args, **kwargs):
     image_root = kwargs['image_root']
 
     query_texts, query_images, cand_texts, cand_images, dataset_infos = [], [], [], [], []
+    n = len(batch_dict['qry_text'])
+    qry_insts = batch_dict['qry_inst'] if 'qry_inst' in batch_dict else [""] * n
+    tgt_insts = batch_dict['tgt_inst'] if 'tgt_inst' in batch_dict else [""] * n
     for qry_inst, qry_text, tgt_inst, tgt_captions, tgt_img_paths in (
-            zip(batch_dict['qry_inst'], batch_dict['qry_text'], batch_dict['tgt_inst'], batch_dict['tgt_text'], batch_dict['tgt_img_path'])):
+            zip(qry_insts, batch_dict['qry_text'], tgt_insts, batch_dict['tgt_text'], batch_dict['tgt_img_path'])):
         qry_inst = qry_inst.replace("<|image_1|>", VLM_IMAGE_TOKENS[model_backbone])
         query_text = qry_inst + ' ' + qry_text + '\n'
         if kwargs['dataset_name'] == 'VisDial':
@@ -24,6 +27,8 @@ def data_prepare(batch_dict, *args, **kwargs):
         query_texts.append([query_text])
         query_images.append([None])
 
+        tgt_captions = list(tgt_captions)
+        tgt_img_paths = list(tgt_img_paths)
         # subtle target side processing, to stay consistent with v1 eval
         if tgt_captions[0].strip():  # WebQA, EDIS have valid text inputs
             tgt_inst = tgt_inst.replace("<|image_1|>", "")

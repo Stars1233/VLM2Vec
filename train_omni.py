@@ -112,7 +112,12 @@ def main():
                     task_config['image_dir'] = os.path.join(data_args.data_basedir, image_dir)
         train_dataset = init_mixed_dataset(dataset_config, model_args, data_args, training_args)
 
-    train_collator = OmniAutoProcessorCollator(processor, model_args, data_args, training_args)
+    train_collator = OmniAutoProcessorCollator(
+        processor=processor,
+        data_args=data_args,
+        model_args=model_args,
+        training_args=training_args,
+    )
 
     trainer = OmniEmbedTrainer(
         model=model,
