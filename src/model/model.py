@@ -290,6 +290,60 @@ class MMEBModel(nn.Module):
             if "feature_attention_mask" in model_input and isinstance(model_input["feature_attention_mask"], torch.Tensor):
                 model_input["feature_attention_mask"] = model_input["feature_attention_mask"].to(dtype=torch.long)
 
+            # 4.1) Sanitize audio rows: drop zero-length rows to avoid Qwen2.5-Omni audio tower
+            # receiving empty sequences (can crash in avg_pool1d with length 0).
+            feats = model_input.get("input_features", None)
+            fam = model_input.get("feature_attention_mask", None)
+            if isinstance(feats, torch.Tensor) and isinstance(fam, torch.Tensor):
+                # Ensure feature/mask time dims are aligned.
+                if feats.dim() >= 3 and fam.dim() == 2:
+                    feat_t = feats.shape[-1]
+                    mask_t = fam.shape[-1]
+                    if feat_t != mask_t:
+                        min_t = min(feat_t, mask_t)
+                        feats = feats[..., :min_t]
+                        fam = fam[:, :min_t]
+
+                    if feats.shape[-1] == 0:
+                        model_input.pop("input_features", None)
+                        model_input.pop("feature_attention_mask", None)
+                        model_input.pop("audio_feature_lengths", None)
+                    else:
+                        audio_lens = fam.sum(dim=1)
+                        invalid_audio = audio_lens <= 0
+                        if torch.any(invalid_audio):
+                            feats = feats.clone()
+                            fam = fam.clone()
+                            feats[invalid_audio] = 0
+                            fam[invalid_audio] = 0
+                            valid_audio_rows = torch.nonzero(fam.sum(dim=1) > 0, as_tuple=False).squeeze(1)
+                            if valid_audio_rows.numel() == 0:
+                                model_input.pop("input_features", None)
+                                model_input.pop("feature_attention_mask", None)
+                                model_input.pop("audio_feature_lengths", None)
+                            else:
+                                model_input["input_features"] = feats.index_select(0, valid_audio_rows)
+                                model_input["feature_attention_mask"] = fam.index_select(0, valid_audio_rows)
+                                afl = model_input.get("audio_feature_lengths", None)
+                                if isinstance(afl, torch.Tensor) and afl.dim() > 0:
+                                    if afl.size(0) == fam.size(0):
+                                        model_input["audio_feature_lengths"] = afl.index_select(0, valid_audio_rows)
+                                    else:
+                                        model_input.pop("audio_feature_lengths", None)
+                        else:
+                            model_input["input_features"] = feats
+                            model_input["feature_attention_mask"] = fam
+
+            # Recompute modality flags after audio sanitization.
+            has_image = _has_nonempty(model_input, "pixel_values") or _has_nonempty(model_input, "image_grid_thw")
+            has_video = _has_nonempty(model_input, "pixel_values_videos") or _has_nonempty(model_input, "video_grid_thw")
+            has_audio = (
+                _has_nonempty(model_input, "input_features")
+                or _has_nonempty(model_input, "feature_attention_mask")
+                or _has_nonempty(model_input, "audio_feature_lengths")
+            )
+            has_multimodal = has_image or has_video or has_audio
+
             # 5) forward
             if has_multimodal:
                 outputs = self.encoder(
@@ -527,7 +581,28 @@ class MMEBModel(nn.Module):
         if model_args.lora:
             print_master(f"Loading LoRA from {model_name_or_path}")
             lora_config = LoraConfig.from_pretrained(model_name_or_path)
-            if hasattr(base_model, "model") and base_model.model is not None:
+            # Qwen2.5-Omni wrapper note:
+            #   OmniEmbedForConditionalGeneration.forward -> self.base_model(...)
+            # so LoRA must be attached to `base_model.base_model.model` (thinker.model),
+            # not only to wrapper attribute `base_model.model`.
+            if (
+                model_args.model_backbone == QWEN2_5_OMNI
+                and hasattr(base_model, "base_model")
+                and getattr(base_model.base_model, "model", None) is not None
+            ):
+                lora_model = PeftModel.from_pretrained(
+                    base_model.base_model.model, model_name_or_path, config=lora_config, is_trainable=is_trainable
+                )
+                lora_model.load_adapter(model_name_or_path, lora_model.active_adapter, is_trainable=is_trainable)
+                if not is_trainable:
+                    lora_model = lora_model.merge_and_unload()
+                base_model.base_model.model = lora_model
+                # Keep wrapper mirror attribute in sync for downstream checks.
+                if hasattr(base_model, "model"):
+                    base_model.model = lora_model
+                print_master("LoRA attached to qwen2_5_omni thinker.model.")
+                encoder = base_model
+            elif hasattr(base_model, "model") and base_model.model is not None:
                 lora_model = PeftModel.from_pretrained(
                     base_model.model, model_name_or_path, config=lora_config, is_trainable=is_trainable
                 )

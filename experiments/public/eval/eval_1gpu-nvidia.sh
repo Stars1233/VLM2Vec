@@ -6,18 +6,21 @@ echo "Python location: $(which python)"
 echo "Python version: $(python --version)"
 echo ""
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-cd "$REPO_ROOT" || exit 1
+# cd projects/VLM2Vec/ || exit
 
 # ==============================================================================
 # Configuration
 # ==============================================================================
-CUDA_VISIBLE_DEVICES="4,5,6,7"
+CUDA_VISIBLE_DEVICES="5"
 BATCH_SIZE=8
-MODALITIES=("image" "video" "tool" "visdoc" "audio" "text")
+# NPROC=2 多卡
+# NPROC=2 
+# BATCH_SIZE=8
+# MODALITIES=("image" "video" "tool" "visdoc" "audio" "text")
+MODALITIES=("MCMR")
 DATA_BASEDIR=/data/mengrui/.cache/huggingface/datasets/MMEB-V3
 OUTPUT_BASEDIR=exps/vlm2vec
+
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 TIMING_LOG="$OUTPUT_BASEDIR/eval_timing_${TIMESTAMP}.csv"
 
@@ -30,19 +33,18 @@ format_duration() {
   printf "%02d:%02d:%02d" "$hours" "$minutes" "$seconds"
 }
 
-
 # ==> Define models and their base output paths here
 # Format: "MODEL_NAME;MODEL_BACKBONE;BASE_OUTPUT_PATH[;CHECKPOINT_PATH]"
 declare -a MODEL_SPECS
+# 选项1: 使用本地Qwen2-VL-2B + VLM2Vec-V2.0适配器（推荐，避免网络下载）
+# MODEL_SPECS+=( "/code/.cache/huggingface/Qwen2-VL-2B;qwen2_vl;$OUTPUT_BASEDIR/VLM2Vec-V2.0-Qwen2VL-2B;/code/.cache/huggingface/VLM2Vec-V2.0" )
+# MODEL_SPECS+=( "/code/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/VLM2Vec-V3.0-Qwen2_5omni-3B;/code/OLM2VEC_and_MMEB-V3/VLM2Vec1/VLM2Vec/exps/output_model/Qwen2_5Omni_3B.audio.lora16.BS512.IB64.GCq8p8.NormTemp002.lr5e5.step5kwarm100/checkpoint-2850" )
+
 MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/omni-embed-nemotron-3b;nvomniembed;$OUTPUT_BASEDIR/omni-embed-nemotron-3b" )
-# MODEL_SPECS+=( "VLM2Vec/VLM2Vec-V2.0;qwen2_vl;$OUTPUT_BASEDIR/VLM2Vec-V2.0-Qwen2VL-2B" )
 # MODEL_SPECS+=( "Alibaba-NLP/gme-Qwen2-VL-2B-Instruct;gme;$OUTPUT_BASEDIR/gme-Qwen2-VL-2B-Instruct" )
 # MODEL_SPECS+=( "Alibaba-NLP/gme-Qwen2-VL-7B-Instruct;gme;$OUTPUT_BASEDIR/gme-Qwen2-VL-7B-Instruct" )
 # MODEL_SPECS+=( "code-kunkun/LamRA-Ret;lamra;$OUTPUT_BASEDIR/LamRA-Ret" )
 # MODEL_SPECS+=( "vidore/colpali-v1.3;colpali;$OUTPUT_BASEDIR/colpali-v1.3" )
-#MODEL_SPECS+=( "royokong/e5-v;llava_next;$OUTPUT_BASEDIR/e5-v" )
-#MODEL_SPECS+=( "src/model/vlm_backbone/internvideo2/;internvideo2;$OUTPUT_BASEDIR/internvideo2" )
-#MODEL_SPECS+=( "code-kunkun/LamRA-Ret-Qwen2.5VL-7b;lamra-qwen25;$OUTPUT_BASEDIR/gme-Qwen2-VL-7B-Instruct" )  # not ready
 
 
 # ==============================================================================
@@ -51,20 +53,13 @@ MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/omni-embed-nemotron-3b;nvomniem
 mkdir -p "$OUTPUT_BASEDIR"
 echo "model_name,modality,start_time,end_time,duration_seconds,duration_hms,status" > "$TIMING_LOG"
 echo "==> Timing log: $TIMING_LOG"
-echo ""
 
 global_start_ts=$(date +%s)
-failed_tasks=0
 
 # Loop through each model specification
 for spec in "${MODEL_SPECS[@]}"; do
-  # Parse the model specification from the spec string
+  # Parse the model specification: MODEL_NAME;MODEL_BACKBONE;BASE_OUTPUT_PATH[;CHECKPOINT_PATH]
   IFS=';' read -r MODEL_NAME MODEL_BACKBONE BASE_OUTPUT_PATH CHECKPOINT_PATH <<< "$spec"
-  if [ -z "$MODEL_NAME" ] || [ -z "$MODEL_BACKBONE" ] || [ -z "$BASE_OUTPUT_PATH" ]; then
-    echo "Invalid MODEL_SPECS entry: $spec"
-    echo "Expected format: MODEL_NAME;MODEL_BACKBONE;BASE_OUTPUT_PATH[;CHECKPOINT_PATH]"
-    exit 1
-  fi
   model_start_ts=$(date +%s)
 
   echo "================================================="
@@ -75,10 +70,6 @@ for spec in "${MODEL_SPECS[@]}"; do
   for MODALITY in "${MODALITIES[@]}"; do
     DATA_CONFIG_PATH="experiments/public/eval/$MODALITY.yaml"
     OUTPUT_PATH="$BASE_OUTPUT_PATH/$MODALITY/"
-    if [ "$BASE_OUTPUT_PATH" = "/" ] || [ -z "$BASE_OUTPUT_PATH" ]; then
-      echo "Invalid BASE_OUTPUT_PATH resolved to '$BASE_OUTPUT_PATH' for spec: $spec"
-      exit 1
-    fi
 
     echo "-------------------------------------------------"
     echo "  - Modality: $MODALITY"
@@ -86,8 +77,9 @@ for spec in "${MODEL_SPECS[@]}"; do
 
     # Ensure the output directory exists
     mkdir -p "$OUTPUT_PATH"
-
-    cmd="CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES torchrun --nproc_per_node=8 --master_port=2277 --max_restarts=0 eval.py \
+# --pooling eos
+#   cmd="CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES torchrun --nproc_per_node $NPROC eval.py \ duoka
+    cmd="CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES python eval.py \
       --pooling mean \
       --normalize true \
       --per_device_eval_batch_size $BATCH_SIZE \
@@ -95,13 +87,13 @@ for spec in "${MODEL_SPECS[@]}"; do
       --model_name \"$MODEL_NAME\" \
       --dataset_config \"$DATA_CONFIG_PATH\" \
       --encode_output_path \"$OUTPUT_PATH\" \
-      --data_basedir \"$DATA_BASEDIR\""
-
-    # Add checkpoint_path only when provided in MODEL_SPECS.
+      --data_basedir \"$DATA_BASEDIR\" "
+    # Add checkpoint_path if specified new added --lora true：--lora true \
+      # --processor_name /code/.cache/huggingface/Qwen2.5-Omni-3B
     if [ -n "$CHECKPOINT_PATH" ]; then
       cmd="$cmd --checkpoint_path \"$CHECKPOINT_PATH\""
     fi
-
+    
     echo "  - Executing command..."
     start_time_human="$(date '+%Y-%m-%d %H:%M:%S')"
     start_ts=$(date +%s)
@@ -110,7 +102,6 @@ for spec in "${MODEL_SPECS[@]}"; do
       status="success"
     else
       status="failed"
-      failed_tasks=$((failed_tasks + 1))
     fi
     end_ts=$(date +%s)
     end_time_human="$(date '+%Y-%m-%d %H:%M:%S')"
@@ -125,7 +116,6 @@ for spec in "${MODEL_SPECS[@]}"; do
   model_duration_seconds=$((model_end_ts - model_start_ts))
   model_duration_hms="$(format_duration "$model_duration_seconds")"
   echo "Model total time: $model_duration_hms (${model_duration_seconds}s)"
-  echo ""
 done
 
 global_end_ts=$(date +%s)
@@ -134,9 +124,4 @@ global_duration_hms="$(format_duration "$global_duration_seconds")"
 
 echo "✅ All jobs completed."
 echo "Total time: $global_duration_hms (${global_duration_seconds}s)"
-echo "Failed tasks: $failed_tasks"
 echo "Timing details saved to: $TIMING_LOG"
-
-if [ "$failed_tasks" -gt 0 ]; then
-  exit 1
-fi

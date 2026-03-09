@@ -33,7 +33,7 @@ import yaml
 
 # Import from VLM2Vec project
 from src.arguments import ModelArguments, DataArguments, TrainingArguments as VLMTrainingArguments
-from src.loss import SimpleContrastiveLoss, DistributedContrastiveLoss
+from src.loss_omni import InfoNCELoss, DDPInfoNCELoss, OmniTwoStageLoss
 from src.data.collator.train_collator_omni import OmniAutoProcessorCollator
 from src.data.loader.mixed_dataset import init_mixed_dataset
 from src.model.processor import load_processor, get_backbone_name
@@ -48,15 +48,6 @@ logger = logging.get_logger(__name__)
 # =========================
 def is_ddp_ready() -> bool:
     return dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1
-
-
-def info_nce_loss(q_reps: torch.Tensor, p_reps: torch.Tensor, temperature: float) -> torch.Tensor:
-    q = F.normalize(q_reps, dim=-1)
-    p = F.normalize(p_reps, dim=-1)
-    scores = q @ p.t()
-    target = torch.arange(scores.size(0), device=scores.device)
-    return F.cross_entropy(scores / float(temperature), target)
-
 
 # =========================
 # Model loading helpers
@@ -333,11 +324,32 @@ class OmniEmbedder(nn.Module):
                 inputs.pop("feature_attention_mask", None)
                 inputs.pop("audio_feature_lengths", None)
             else:
-                audio_lens = inputs["feature_attention_mask"].sum(dim=1)
-                if torch.any(audio_lens <= 0):
-                    inputs.pop("input_features", None)
-                    inputs.pop("feature_attention_mask", None)
-                    inputs.pop("audio_feature_lengths", None)
+                feats = inputs["input_features"]
+                masks = inputs["feature_attention_mask"]
+                audio_lens = masks.sum(dim=1)
+                invalid_audio = audio_lens <= 0
+                if torch.any(invalid_audio):
+                    # Keep other samples intact: zero-out only invalid audio rows.
+                    # Qwen2.5-Omni audio tower cannot handle zero-length rows mixed in batch,
+                    # so we compact to valid audio rows after row-wise sanitization.
+                    feats = feats.clone()
+                    masks = masks.clone()
+                    feats[invalid_audio] = 0
+                    masks[invalid_audio] = 0
+                    valid_audio_rows = torch.nonzero(masks.sum(dim=1) > 0, as_tuple=False).squeeze(1)
+                    if valid_audio_rows.numel() == 0:
+                        inputs.pop("input_features", None)
+                        inputs.pop("feature_attention_mask", None)
+                        inputs.pop("audio_feature_lengths", None)
+                    else:
+                        inputs["input_features"] = feats.index_select(0, valid_audio_rows)
+                        inputs["feature_attention_mask"] = masks.index_select(0, valid_audio_rows)
+                        afl = inputs.get("audio_feature_lengths", None)
+                        if isinstance(afl, torch.Tensor):
+                            if afl.dim() > 0 and afl.size(0) == masks.size(0):
+                                inputs["audio_feature_lengths"] = afl.index_select(0, valid_audio_rows)
+                            else:
+                                inputs.pop("audio_feature_lengths", None)
 
         for k, v in list(inputs.items()):
             if isinstance(v, torch.Tensor):
@@ -427,8 +439,124 @@ class OmniEmbedTrainer(Trainer):
         if temperature is None:
             temperature = 0.02
 
-        loss_cls = DistributedContrastiveLoss if (self.is_ddp and dist.get_world_size() > 1) else SimpleContrastiveLoss
-        self.model.loss_fn = loss_cls(temperature=float(temperature))
+        self.loss_stage = str(getattr(self.args, "loss_stage", "infonce")).strip().lower()
+        self.loss_alpha = float(getattr(self.args, "loss_alpha", 0.5))
+        if self.loss_stage not in {"infonce", "jepa", "mixed"}:
+            raise ValueError(f"Unsupported loss_stage={self.loss_stage}, expected one of infonce/jepa/mixed")
+
+        loss_cls = DDPInfoNCELoss if (self.is_ddp and dist.get_world_size() > 1) else InfoNCELoss
+        self.model.loss_fn = loss_cls(temperature=float(temperature), normalize=True)
+        self.model.loss_stage = self.loss_stage
+
+        if self.loss_stage in {"jepa", "mixed"}:
+            emb_dim = self._infer_embed_dim(self.model)
+            if emb_dim is None and self.model_args is not None:
+                cfg_source = (
+                    getattr(self.model_args, "checkpoint_path", None)
+                    or getattr(self.model_args, "model_name", None)
+                )
+                emb_dim = self._infer_embed_dim_from_config_source(cfg_source)
+            if emb_dim is None:
+                raise ValueError(
+                    "Cannot infer embedding dim for OmniTwoStageLoss. "
+                    "Please ensure model config exposes hidden_size."
+                )
+            jepa_hidden = int(getattr(self.args, "jepa_predictor_hidden", 0))
+            if jepa_hidden <= 0:
+                jepa_hidden = None
+            ref_param = next(self.model.parameters())
+            self.model.two_stage_loss = OmniTwoStageLoss(
+                emb_dim=int(emb_dim),
+                infonce_temperature=float(temperature),
+                use_ddp_infonce=(self.is_ddp and dist.get_world_size() > 1),
+                jepa_predictor_hidden=jepa_hidden,
+                normalize=True,
+            ).to(device=ref_param.device, dtype=ref_param.dtype)
+
+    @staticmethod
+    def _infer_embed_dim(model) -> Optional[int]:
+        # Try common hidden-size fields from wrapped backbone configs.
+        cfg_candidates = []
+        try:
+            if hasattr(model, "encoder") and hasattr(model.encoder, "model") and hasattr(model.encoder.model, "config"):
+                cfg_candidates.append(model.encoder.model.config)
+        except Exception:
+            pass
+        try:
+            if hasattr(model, "module") and hasattr(model.module, "encoder") and hasattr(model.module.encoder, "model") and hasattr(model.module.encoder.model, "config"):
+                cfg_candidates.append(model.module.encoder.model.config)
+        except Exception:
+            pass
+
+        for cfg in cfg_candidates:
+            if cfg is None:
+                continue
+
+            # Top-level (e.g. talker hidden_size, or simple backbones)
+            for attr in ("hidden_size", "d_model", "model_dim"):
+                v = getattr(cfg, attr, None)
+                if isinstance(v, int) and v > 0:
+                    return v
+
+            # Qwen2.5-Omni thinker hierarchy
+            thinker_cfg = getattr(cfg, "thinker_config", None)
+            if thinker_cfg is not None:
+                for sub in (
+                    thinker_cfg,
+                    getattr(thinker_cfg, "text_config", None),
+                    getattr(thinker_cfg, "model_config", None),
+                    getattr(thinker_cfg, "vision_config", None),
+                    getattr(thinker_cfg, "audio_config", None),
+                ):
+                    if sub is None:
+                        continue
+                    for attr in ("hidden_size", "d_model", "model_dim", "embed_dim", "output_dim"):
+                        v = getattr(sub, attr, None)
+                        if isinstance(v, int) and v > 0:
+                            return v
+
+            # Extra fallbacks for nested dict-like configs
+            try:
+                cfg_dict = cfg.to_dict() if hasattr(cfg, "to_dict") else dict(cfg)
+            except Exception:
+                cfg_dict = None
+            if isinstance(cfg_dict, dict):
+                for key_path in [
+                    ("thinker_config", "text_config", "hidden_size"),
+                    ("thinker_config", "vision_config", "embed_dim"),
+                    ("thinker_config", "audio_config", "output_dim"),
+                    ("hidden_size",),
+                ]:
+                    cur = cfg_dict
+                    ok = True
+                    for k in key_path:
+                        if isinstance(cur, dict) and k in cur:
+                            cur = cur[k]
+                        else:
+                            ok = False
+                            break
+                    if ok and isinstance(cur, int) and cur > 0:
+                        return cur
+        return None
+
+    @classmethod
+    def _infer_embed_dim_from_config_source(cls, config_source: Optional[str]) -> Optional[int]:
+        if not isinstance(config_source, str) or not config_source:
+            return None
+        try:
+            cfg = AutoConfig.from_pretrained(config_source, trust_remote_code=True)
+        except Exception:
+            return None
+
+        # Reuse the same inference logic by wrapping cfg in a minimal object shape.
+        class _Wrap:
+            pass
+
+        wrapped = _Wrap()
+        wrapped.encoder = _Wrap()
+        wrapped.encoder.model = _Wrap()
+        wrapped.encoder.model.config = cfg
+        return cls._infer_embed_dim(wrapped)
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         qry_batch, tgt_batch = inputs
@@ -475,41 +603,25 @@ class OmniEmbedTrainer(Trainer):
             if q_reps is None or p_reps is None:
                 loss = torch.tensor(0.0, device=next(real_model.parameters()).device)
             else:
-                temperature = getattr(real_model, "temperature", 0.02)
-                if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
-                    # Gather global negatives; keep only local reps with grad, detach remote reps.
-                    world = dist.get_world_size()
-                    rank = dist.get_rank()
-                    device = q_reps.device
-                    local_b = torch.tensor([q_reps.size(0)], device=device, dtype=torch.long)
-                    sizes = [torch.zeros_like(local_b) for _ in range(world)]
-                    dist.all_gather(sizes, local_b)
-                    sizes = [int(s.item()) for s in sizes]
-                    max_b = max(sizes)
-
-                    if p_reps.size(0) < max_b:
-                        pad = torch.zeros((max_b - p_reps.size(0), p_reps.size(1)), device=device, dtype=p_reps.dtype)
-                        p_pad = torch.cat([p_reps, pad], dim=0)
-                    else:
-                        p_pad = p_reps
-
-                    gathered = [torch.empty_like(p_pad) for _ in range(world)]
-                    dist.all_gather(gathered, p_pad)
-
-                    parts = []
-                    for r, (g, b) in enumerate(zip(gathered, sizes)):
-                        if r == rank:
-                            parts.append(p_reps)
-                        else:
-                            parts.append(g[:b].detach())
-                    all_p = torch.cat(parts, dim=0)
-
-                    offset = sum(sizes[:rank])
-                    target = torch.arange(q_reps.size(0), device=device) + offset
-                    scores = q_reps @ all_p.t()
-                    loss = F.cross_entropy(scores / float(temperature), target)
+                stage = getattr(real_model, "loss_stage", "infonce")
+                if stage == "infonce":
+                    loss = real_model.loss_fn(q_reps, p_reps, reduction="mean")
+                elif stage == "jepa":
+                    out = real_model.two_stage_loss(stage="jepa", z_c=q_reps, z_t=p_reps, reduction="mean")
+                    loss = out.loss
+                elif stage == "mixed":
+                    out = real_model.two_stage_loss(
+                        stage="mixed",
+                        z_c=q_reps,
+                        z_t=p_reps,
+                        q=q_reps,
+                        d=p_reps,
+                        alpha=self.loss_alpha,
+                        reduction="mean",
+                    )
+                    loss = out.loss
                 else:
-                    loss = info_nce_loss(q_reps, p_reps, temperature)
+                    raise ValueError(f"Unknown loss stage: {stage}")
         if not hasattr(self, "_debug_loss_once"):
             self._debug_loss_once = True
             q_ids = qry_batch.get("input_ids")
@@ -543,8 +655,8 @@ class OmniEmbedTrainer(Trainer):
             loss_fp = float(loss.detach().cpu().item()) if isinstance(loss, torch.Tensor) else float(loss)
 
             try:
-                q = model.encode(qry_batch)
-                p = model.encode(tgt_batch)
+                q = real_model.encode(qry_batch)
+                p = real_model.encode(tgt_batch)
                 logits = torch.matmul(q, p.transpose(0, 1))
                 top1 = (logits.argmax(dim=1) == torch.arange(logits.size(0), device=logits.device)).float().mean()
                 cos_diag = torch.sum(F.normalize(q, dim=-1) * F.normalize(p, dim=-1), dim=-1)
@@ -809,73 +921,9 @@ class OmniEmbedTrainer(Trainer):
 # Main
 # =========================
 def main():
-    parser = HfArgumentParser((ModelArguments, DataArguments, VLMTrainingArguments))
-    model_args, data_args, training_args = parser.parse_args_into_dataclasses()
-
-    # Required when collator returns tuple/dicts
-    try:
-        training_args.remove_unused_columns = False
-    except Exception:
-        pass
-
-    # If you only want thinker.model training, keep this False.
-    # If you need small adapters/projections trainable, set True.
-    train_proj_adapters = False
-
-    encoder = OmniEmbedder(
-        model_name_or_path=model_args.model_name,
-        torch_dtype=torch.bfloat16,
-        device_map=None,
-        pooling="mean",
-        normalize=True,
-        train_proj_adapters=train_proj_adapters,
-        lora=getattr(model_args, "lora", False),
-        lora_r=getattr(model_args, "lora_r", 16),
-        lora_alpha=getattr(model_args, "lora_alpha", 64),
-        lora_dropout=getattr(model_args, "lora_dropout", 0.1),
-        lora_target_modules=getattr(model_args, "lora_target_modules", None),
-        full_finetune=getattr(model_args, "full_finetune", False),
-    )
-
-    # VLM2Vec compatibility
-    model_backbone = get_backbone_name(encoder.model.config)
-    setattr(model_args, "model_backbone", model_backbone)
-    setattr(training_args, "model_backbone", model_backbone)
-
-    processor = load_processor(model_args, data_args)
-    setattr(encoder, "processor", processor)
-
-    model = OmniBiEncoder(encoder=encoder, temperature=model_args.temperature, loss_fn=None)
-    log_trainable_stats(model)
-
-    with open(data_args.dataset_config, "r") as f:
-        dataset_config = yaml.safe_load(f)
-        if data_args.data_basedir:
-            for _, task_config in dataset_config.items():
-                image_dir = task_config.get("image_dir")
-                if image_dir and not os.path.isabs(image_dir):
-                    task_config["image_dir"] = os.path.join(data_args.data_basedir, image_dir)
-        train_dataset = init_mixed_dataset(dataset_config, model_args, data_args, training_args)
-
-    train_collator = OmniAutoProcessorCollator(
-        processor=processor,
-        data_args=data_args,
-        model_args=model_args,
-        training_args=training_args,
-    )
-
-    trainer = OmniEmbedTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        data_collator=train_collator,
-        max_length=getattr(data_args, "max_len", None),
-        model_args=model_args,
-        save_thinker_only=True,  # always drop talker on save
-    )
-
-    trainer.train()
-    trainer.save_model(training_args.output_dir)
+    # Delegate to canonical entrypoint to avoid dual-main drift.
+    from train_omni import main as canonical_main
+    return canonical_main()
 
 
 if __name__ == "__main__":

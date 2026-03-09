@@ -1,9 +1,11 @@
 """
-SpeechCOCO 文本->音频检索训练数据集处理（适配 train_collator_omni）。
+SpeechCOCO 音频->图像检索训练数据集处理（适配 train_collator_omni）。
 - 数据源：本地 parquet 分片（MMEB-V3-train speechcoco）
 - 训练样本形式：
-    query_text = build_query_text("SpeechCOCO", text)
-    pos_audio  = {"path": ..., "bytes": ..., "start": None, "end": None}
+    query_text  = build_query_text("SpeechCOCO")
+    query_audio = {"path": ..., "bytes": ..., "start": None, "end": None}
+    pos_text    = process_input_text(..., add_image_token=True)
+    pos_image   = {"paths": [...], "bytes": [...], "resolutions": [(w,h)]}
 """
 
 import glob
@@ -13,13 +15,14 @@ from typing import Any, Dict, List
 import datasets
 import pyarrow as pa
 
-from src.data.dataset.base_pair_dataset import AutoPairDataset
+from src.data.dataset.base_pair_dataset import AutoPairDataset, RESOLUTION_MAPPING
 from src.data.eval_dataset.audio_instruction_utils import build_query_text
+from src.model.processor import process_input_text
 from src.utils.basic_utils import print_master
 from src.utils.dataset_utils import sample_dataset
 
 
-POS_TEXT_AUDIO = "[AUDIO]"
+POS_TEXT_IMAGE_INST = "Understand the content of the provided image."
 DEFAULT_DATA_PATH = (
     "/data/mengrui/.cache/huggingface/datasets/MMEB-V3-train/audio-tasks-train/speechcoco"
 )
@@ -55,9 +58,6 @@ def _load_parquet_dataset(parquet_files: List[str], cache_dir: str = None) -> da
 
 
 def _is_valid_row(row: Dict[str, Any]) -> bool:
-    text = row.get("text")
-    if not isinstance(text, str) or not text.strip():
-        return False
     audio = row.get("audio")
     if not isinstance(audio, dict):
         return False
@@ -65,9 +65,26 @@ def _is_valid_row(row: Dict[str, Any]) -> bool:
     audio_bytes = audio.get("bytes")
     if audio_bytes is not None:
         if isinstance(audio_bytes, (bytes, bytearray)):
-            return len(audio_bytes) > 0
-        return True
-    return isinstance(audio_path, str) and len(audio_path.strip()) > 0
+            audio_ok = len(audio_bytes) > 0
+        else:
+            audio_ok = True
+    else:
+        audio_ok = isinstance(audio_path, str) and len(audio_path.strip()) > 0
+
+    image = row.get("image")
+    if not isinstance(image, dict):
+        return False
+    image_path = image.get("path")
+    image_bytes = image.get("bytes")
+    if image_bytes is not None:
+        if isinstance(image_bytes, (bytes, bytearray)):
+            image_ok = len(image_bytes) > 0
+        else:
+            image_ok = True
+    else:
+        image_ok = isinstance(image_path, str) and len(image_path.strip()) > 0
+
+    return audio_ok and image_ok
 
 
 def _build_audio_with_start_end(dataset: datasets.Dataset, column: str) -> datasets.Dataset:
@@ -116,10 +133,61 @@ def _build_audio_with_start_end(dataset: datasets.Dataset, column: str) -> datas
     return datasets.Dataset(out_table)
 
 
+def _build_image_with_resolution(
+    dataset: datasets.Dataset, column: str, resolution: List[int]
+) -> datasets.Dataset:
+    """
+    将 struct<bytes,path> 规范成 struct<paths,bytes,resolutions>：
+      - paths: List[str]，每行 1 个元素
+      - bytes: List[bytes]，每行 1 个元素
+      - resolutions: List[List[int,int]]，每行 1 个元素
+    使用 Arrow 构造避免把整列图像 bytes 拉入 Python。
+    """
+    if column not in dataset.column_names:
+        raise KeyError(f"[SpeechCOCO] missing column: {column}")
+
+    ds_table = dataset.data
+    pa_table = ds_table.table if hasattr(ds_table, "table") else ds_table
+    col_idx = pa_table.column_names.index(column)
+    src_col = pa_table.column(column)
+
+    pair_type = pa.list_(pa.int32(), 2)
+    resolution_pair = [int(resolution[0]), int(resolution[1])]
+    out_chunks = []
+
+    for chunk in src_col.chunks:
+        if not pa.types.is_struct(chunk.type):
+            raise TypeError(f"[SpeechCOCO] {column} must be a struct column, got={chunk.type}")
+
+        n = len(chunk)
+        field_names = set(chunk.type.names)
+
+        path_arr = chunk.field("path") if "path" in field_names else pa.nulls(n, type=pa.string())
+        bytes_arr = chunk.field("bytes") if "bytes" in field_names else pa.nulls(n, type=pa.binary())
+
+        offsets = pa.array(range(n + 1), type=pa.int32())
+        paths_list = pa.ListArray.from_arrays(offsets, path_arr, type=pa.list_(pa.string()))
+        bytes_list = pa.ListArray.from_arrays(offsets, bytes_arr, type=pa.list_(pa.binary()))
+
+        pair_values = pa.array([resolution_pair] * n, type=pair_type)
+        resolutions_list = pa.ListArray.from_arrays(offsets, pair_values, type=pa.list_(pair_type))
+
+        out_chunks.append(
+            pa.StructArray.from_arrays(
+                [paths_list, bytes_list, resolutions_list],
+                names=["paths", "bytes", "resolutions"],
+            )
+        )
+
+    out_col = pa.chunked_array(out_chunks)
+    out_table = pa_table.set_column(col_idx, column, out_col)
+    return datasets.Dataset(out_table)
+
+
 @AutoPairDataset.register("load_audio_speechcoco_dataset")
 def load_audio_speechcoco_dataset(*args: Any, **kwargs: Any):
     """
-    加载 SpeechCOCO 训练数据（文本->音频检索），适配 train_collator_omni。
+    加载 SpeechCOCO 训练数据（音频->图像检索），适配 train_collator_omni。
 
     参数（kwargs）：
         data_path: 数据根目录（默认 MMEB-V3-train speechcoco 本地路径）
@@ -154,8 +222,10 @@ def load_audio_speechcoco_dataset(*args: Any, **kwargs: Any):
             "id",
             "image_id",
             "audio",
+            "image",
             "text",
             "duration",
+            "timecode",
             "speaker",
             "gender",
             "nationality",
@@ -172,25 +242,50 @@ def load_audio_speechcoco_dataset(*args: Any, **kwargs: Any):
     if len(dataset) == 0:
         raise ValueError("[SpeechCOCO] no valid rows after filtering")
 
-    dataset = dataset.rename_column("audio", "pos_audio")
-    dataset = _build_audio_with_start_end(dataset, "pos_audio")
+    # query: audio
+    dataset = dataset.rename_column("audio", "query_audio")
+    dataset = _build_audio_with_start_end(dataset, "query_audio")
 
-    texts = dataset["text"]
+    # pos: image
+    dataset = dataset.rename_column("image", "pos_image")
+    image_resolution = kwargs.get("image_resolution", None)
+    if image_resolution is None:
+        data_args = kwargs.get("data_args", None)
+        if data_args is not None:
+            image_resolution = getattr(data_args, "image_resolution", None)
+    resolution = RESOLUTION_MAPPING.get(image_resolution, RESOLUTION_MAPPING["low"])
+    dataset = _build_image_with_resolution(dataset, "pos_image", resolution)
+
+    # align with eval by default: instruction-only query text
+    use_raw_text_in_query = bool(kwargs.get("use_raw_text_in_query", False))
     query_texts: List[List[str]] = []
-    for t in texts:
-        q = build_query_text("SpeechCOCO", t)
-        assert (
-            isinstance(q, list)
-            and len(q) == 1
-            and isinstance(q[0], str)
-            and q[0].strip()
-        )
-        query_texts.append(q)
+    if use_raw_text_in_query:
+        raw_texts = dataset["text"]
+        for t in raw_texts:
+            q = build_query_text("SpeechCOCO", t)
+            assert isinstance(q, list) and len(q) == 1 and isinstance(q[0], str) and q[0].strip()
+            query_texts.append(q)
+    else:
+        q = build_query_text("SpeechCOCO")
+        assert isinstance(q, list) and len(q) == 1 and isinstance(q[0], str) and q[0].strip()
+        query_texts = [list(q) for _ in range(len(dataset))]
+
+    model_backbone = kwargs.get("model_backbone", None)
+    if model_backbone is None:
+        model_args = kwargs.get("model_args")
+        if model_args is not None:
+            model_backbone = getattr(model_args, "model_backbone", None)
+    if model_backbone is None:
+        raise ValueError("[SpeechCOCO] model_backbone is required")
+
+    pos_text = process_input_text(POS_TEXT_IMAGE_INST, model_backbone, add_image_token=True)
 
     num_rows = len(dataset)
     ids = dataset["id"] if "id" in dataset.column_names else [None] * num_rows
     image_ids = dataset["image_id"] if "image_id" in dataset.column_names else [None] * num_rows
+    texts = dataset["text"] if "text" in dataset.column_names else [None] * num_rows
     durations = dataset["duration"] if "duration" in dataset.column_names else [None] * num_rows
+    timecodes = dataset["timecode"] if "timecode" in dataset.column_names else [None] * num_rows
     speakers = dataset["speaker"] if "speaker" in dataset.column_names else [None] * num_rows
     genders = dataset["gender"] if "gender" in dataset.column_names else [None] * num_rows
     nationalities = dataset["nationality"] if "nationality" in dataset.column_names else [None] * num_rows
@@ -208,7 +303,9 @@ def load_audio_speechcoco_dataset(*args: Any, **kwargs: Any):
             {
                 "id": ids[i],
                 "image_id": image_ids[i],
+                "text": texts[i],
                 "duration": durations[i],
+                "timecode": timecodes[i],
                 "speaker": speakers[i],
                 "gender": genders[i],
                 "nationality": nationalities[i],
@@ -220,9 +317,8 @@ def load_audio_speechcoco_dataset(*args: Any, **kwargs: Any):
 
     dataset = dataset.add_column("query_text", query_texts)
     dataset = dataset.add_column("query_image", [None] * num_rows)
-    dataset = dataset.add_column("query_audio", [None] * num_rows)
-    dataset = dataset.add_column("pos_text", [POS_TEXT_AUDIO] * num_rows)
-    dataset = dataset.add_column("pos_image", [None] * num_rows)
+    dataset = dataset.add_column("pos_text", [pos_text] * num_rows)
+    dataset = dataset.add_column("pos_audio", [None] * num_rows)
     dataset = dataset.add_column("dataset_infos", dataset_infos)
 
     dataset = dataset.select_columns(

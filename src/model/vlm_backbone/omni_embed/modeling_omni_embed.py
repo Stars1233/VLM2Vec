@@ -293,6 +293,62 @@ class OmniEmbedForConditionalGeneration(torch.nn.Module):
         if audio_feature_lengths is not None:
             audio_feature_lengths = audio_feature_lengths.to(device)
 
+        # --------- Audio sanity guard ---------
+        # Keep audio tensor/mask consistent and prevent zero-length rows from
+        # crashing Qwen2.5-Omni audio avg_pool1d.
+        if isinstance(input_features, torch.Tensor) and input_features.numel() == 0:
+            input_features = None
+            feature_attention_mask = None
+            audio_feature_lengths = None
+        elif isinstance(input_features, torch.Tensor):
+            if input_features.dim() == 2:
+                input_features = input_features.unsqueeze(0)
+            if input_features.dim() == 3 and input_features.shape[0] == 0:
+                input_features = None
+                feature_attention_mask = None
+                audio_feature_lengths = None
+            elif input_features.dim() == 3:
+                bsz, _, feat_t = input_features.shape
+                if not isinstance(feature_attention_mask, torch.Tensor):
+                    feature_attention_mask = torch.ones((bsz, feat_t), dtype=torch.long, device=device)
+                else:
+                    if feature_attention_mask.dim() == 1:
+                        feature_attention_mask = feature_attention_mask.unsqueeze(0)
+                    if feature_attention_mask.dim() != 2:
+                        feature_attention_mask = feature_attention_mask.reshape(feature_attention_mask.shape[0], -1)
+
+                    if feature_attention_mask.shape[0] != bsz:
+                        min_b = min(bsz, feature_attention_mask.shape[0])
+                        input_features = input_features[:min_b]
+                        feature_attention_mask = feature_attention_mask[:min_b]
+                        bsz = min_b
+
+                    mask_t = feature_attention_mask.shape[-1]
+                    if feat_t != mask_t:
+                        if feat_t == 0 or mask_t == 0:
+                            input_features = input_features.new_zeros((bsz, input_features.shape[1], 1))
+                            feature_attention_mask = feature_attention_mask.new_zeros((bsz, 1), dtype=torch.long)
+                        else:
+                            min_t = min(feat_t, mask_t)
+                            input_features = input_features[..., :min_t]
+                            feature_attention_mask = feature_attention_mask[:, :min_t]
+
+                if isinstance(feature_attention_mask, torch.Tensor):
+                    feature_attention_mask = feature_attention_mask.long()
+                    if feature_attention_mask.shape[-1] == 0:
+                        input_features = input_features.new_zeros((input_features.shape[0], input_features.shape[1], 1))
+                        feature_attention_mask = feature_attention_mask.new_zeros((feature_attention_mask.shape[0], 1), dtype=torch.long)
+
+                    audio_lens = feature_attention_mask.sum(dim=1)
+                    invalid_audio = audio_lens <= 0
+                    if torch.any(invalid_audio):
+                        input_features = input_features.clone()
+                        feature_attention_mask = feature_attention_mask.clone()
+                        input_features[invalid_audio, :, 0] = 0
+                        feature_attention_mask[invalid_audio, 0] = 1
+
+                    audio_feature_lengths = feature_attention_mask.sum(dim=1).long()
+
         # --------- Modality presence check (text-only is allowed) ---------
         has_visual = (pixel_values is not None) or (pixel_values_videos is not None)
         has_audio = (input_features is not None)

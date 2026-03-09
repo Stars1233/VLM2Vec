@@ -9,6 +9,8 @@ import torchaudio
 from PIL import Image
 from transformers import ProcessorMixin
 
+_OMNI_CHAT_TEMPLATE_INFO_PRINTED = False
+
 @dataclass
 class OmniAutoProcessorCollator:
     processor: ProcessorMixin
@@ -199,7 +201,18 @@ class OmniAutoProcessorCollator:
 
             # if list wrappers exist
             if isinstance(t, list):
-                t = t[0] if len(t) > 0 else " "
+                if len(t) == 0:
+                    t = " "
+                elif all(isinstance(x, str) for x in t):
+                    valid_texts = [x for x in t if x is not None and x.strip()]
+                    if len(valid_texts) == 0:
+                        t = " "
+                    elif len(valid_texts) == 1:
+                        t = valid_texts[0]
+                    else:
+                        t = random.choice(valid_texts)
+                else:
+                    t = t[0]
             if isinstance(raw_img, list):
                 raw_img = raw_img[0] if len(raw_img) > 0 else None
             if isinstance(raw_aud, list):
@@ -317,11 +330,13 @@ class OmniAutoProcessorCollator:
 
     def _should_use_chat_template(self) -> bool:
         try:
-            from src.model.processor import QWEN2_5_OMNI, NVOMNIEMBED
+            from src.model.processor import NVOMNIEMBED, QWEN2_5_OMNI
         except Exception:
             return False
         backbone = getattr(self.model_args, "model_backbone", None)
-        if backbone not in {QWEN2_5_OMNI, NVOMNIEMBED}:
+        # Unify Qwen2.5-Omni and Nemotron to the same official multimodal path:
+        # apply_chat_template + process_mm_info.
+        if backbone not in {NVOMNIEMBED, QWEN2_5_OMNI}:
             return False
         # Only enable if processor exposes apply_chat_template
         if hasattr(self.processor, "apply_chat_template"):
@@ -332,7 +347,7 @@ class OmniAutoProcessorCollator:
 
     def _process_group_chat_template(self, texts, images, videos, audios, max_length: int):
         """
-        Align with Nemotron eval: apply_chat_template + process_mm_info.
+        Apply official multimodal path: apply_chat_template + process_mm_info.
         Uses NVOmni_process_fn which wraps both behaviors.
         """
         from src.model.processor import NVOmni_process_fn
@@ -355,6 +370,15 @@ class OmniAutoProcessorCollator:
 
     # ---------- main ----------
     def __call__(self, examples: List[dict]):
+        # Ensure qwen omni warning filters are active in dataloader worker processes too.
+        if not getattr(self, "_qwen_warning_filter_ready", False):
+            try:
+                from src.model.processor import _install_qwen_omni_warning_filters
+                _install_qwen_omni_warning_filters()
+            except Exception:
+                pass
+            self._qwen_warning_filter_ready = True
+
         # fixed batch size check
         if self.batch_size is not None and len(examples) < self.batch_size:
             raise RuntimeError(f"Expect batch size {self.batch_size}, but got {len(examples)}")
@@ -414,11 +438,94 @@ class OmniAutoProcessorCollator:
         raw_max_len = getattr(self.data_args, "max_len", None)
         max_len = 256 if raw_max_len is None else int(raw_max_len)
         use_chat_template = self._should_use_chat_template()
-        if use_chat_template and not getattr(self, "_printed_chat_template_info", False):
-            print("[INFO] OmniAutoProcessorCollator: using apply_chat_template + process_mm_info (Nemotron-style)")
-            self._printed_chat_template_info = True
+        global _OMNI_CHAT_TEMPLATE_INFO_PRINTED
+        if use_chat_template and not _OMNI_CHAT_TEMPLATE_INFO_PRINTED:
+            print("[INFO] OmniAutoProcessorCollator: using apply_chat_template + process_mm_info")
+            _OMNI_CHAT_TEMPLATE_INFO_PRINTED = True
 
-        def _merge(out_list: List[Dict[str, torch.Tensor]], idx_chunks: List[List[int]], total_bsz: int) -> Dict[str, torch.Tensor]:
+        def _cat_tensors_with_auto_pad(parts: List[torch.Tensor], key: str):
+            if len(parts) == 0:
+                raise ValueError("Cannot concatenate empty tensor parts.")
+            if len(parts) == 1:
+                return parts[0]
+
+            normed = []
+            for p in parts:
+                if not isinstance(p, torch.Tensor):
+                    raise TypeError(f"Expected tensor part for key={key}, got {type(p)}.")
+                normed.append(p.reshape(1) if p.dim() == 0 else p)
+            parts = normed
+
+            ndim = parts[0].dim()
+            if any(p.dim() != ndim for p in parts):
+                shapes = [tuple(p.shape) for p in parts]
+                raise RuntimeError(f"Cannot merge tensors with different ranks for key={key}: {shapes}")
+
+            try:
+                return torch.cat(parts, dim=0)
+            except RuntimeError:
+                if ndim == 1:
+                    return torch.cat(parts, dim=0)
+
+            max_tail = [max(p.shape[d] for p in parts) for d in range(1, ndim)]
+            if all(all(p.shape[d] == max_tail[d - 1] for d in range(1, ndim)) for p in parts):
+                return torch.cat(parts, dim=0)
+
+            pad_value = False if parts[0].dtype == torch.bool else 0
+            padded = []
+            for p in parts:
+                target_shape = (p.shape[0], *max_tail)
+                if tuple(p.shape) == target_shape:
+                    padded.append(p)
+                    continue
+                x = p.new_full(target_shape, pad_value)
+                slices = (slice(None),) + tuple(slice(0, p.shape[d]) for d in range(1, ndim))
+                x[slices] = p
+                padded.append(x)
+            return torch.cat(padded, dim=0)
+
+        def _cat_arrays_with_auto_pad(parts: List[np.ndarray], key: str):
+            if len(parts) == 0:
+                raise ValueError("Cannot concatenate empty ndarray parts.")
+            if len(parts) == 1:
+                return parts[0]
+
+            normed = []
+            for p in parts:
+                if not isinstance(p, np.ndarray):
+                    raise TypeError(f"Expected ndarray part for key={key}, got {type(p)}.")
+                normed.append(p.reshape(1) if p.ndim == 0 else p)
+            parts = normed
+
+            ndim = parts[0].ndim
+            if any(p.ndim != ndim for p in parts):
+                shapes = [tuple(p.shape) for p in parts]
+                raise RuntimeError(f"Cannot merge ndarrays with different ranks for key={key}: {shapes}")
+
+            try:
+                return np.concatenate(parts, axis=0)
+            except ValueError:
+                if ndim == 1:
+                    return np.concatenate(parts, axis=0)
+
+            max_tail = [max(p.shape[d] for p in parts) for d in range(1, ndim)]
+            if all(all(p.shape[d] == max_tail[d - 1] for d in range(1, ndim)) for p in parts):
+                return np.concatenate(parts, axis=0)
+
+            pad_value = False if parts[0].dtype == np.bool_ else 0
+            padded = []
+            for p in parts:
+                target_shape = (p.shape[0], *max_tail)
+                if tuple(p.shape) == target_shape:
+                    padded.append(p)
+                    continue
+                x = np.full(target_shape, pad_value, dtype=p.dtype)
+                slices = (slice(None),) + tuple(slice(0, p.shape[d]) for d in range(1, ndim))
+                x[slices] = p
+                padded.append(x)
+            return np.concatenate(padded, axis=0)
+
+        def _merge(out_list: List[Dict[str, Any]], idx_chunks: List[List[int]], total_bsz: int) -> Dict[str, Any]:
             # Merge per-group outputs back to original sample order.
             all_keys = set()
             for out in out_list:
@@ -426,6 +533,9 @@ class OmniAutoProcessorCollator:
 
             final: Dict[str, Any] = {}
             debug_merge = os.environ.get("VLM2VEC_DEBUG_MERGE_SHAPES", "").lower()
+            # These keys are packed by modality count (num_images/num_videos), not by batch size.
+            # Filling missing rows with zeros corrupts global image/video indices in Qwen2.5-Omni.
+            packed_index_keys = {"image_grid_thw", "video_grid_thw", "video_second_per_grid"}
 
             for k in all_keys:
                 example = None
@@ -454,7 +564,7 @@ class OmniAutoProcessorCollator:
                             extra.append(v)
 
                     if any(x is not None for x in slots):
-                        if ref is not None:
+                        if ref is not None and k not in packed_index_keys:
                             for i, x in enumerate(slots):
                                 if x is None:
                                     slots[i] = torch.zeros(
@@ -468,10 +578,46 @@ class OmniAutoProcessorCollator:
                             if len(set(shapes)) != 1:
                                 print(f"[DEBUG][merge] key={k} reordered_shapes={shapes}")
                         if len(parts) > 0:
-                            final[k] = torch.cat(parts, dim=0)
+                            final[k] = _cat_tensors_with_auto_pad(parts, key=k)
                             continue
                     if len(extra) > 0:
-                        final[k] = torch.cat(extra, dim=0)
+                        final[k] = _cat_tensors_with_auto_pad(extra, key=k)
+                    continue
+
+                if isinstance(example, np.ndarray):
+                    slots = [None] * total_bsz
+                    ref = None
+                    extra = []
+                    for out, chunk in zip(out_list, idx_chunks):
+                        if k not in out or out[k] is None:
+                            continue
+                        v = out[k]
+                        if isinstance(v, torch.Tensor):
+                            v = v.detach().cpu().numpy()
+                        if not isinstance(v, np.ndarray):
+                            continue
+                        ref = ref if ref is not None else v
+                        if v.ndim > 0 and v.shape[0] == len(chunk):
+                            for j, orig_i in enumerate(chunk):
+                                slots[orig_i] = v[j : j + 1]
+                        else:
+                            extra.append(v)
+
+                    if any(x is not None for x in slots):
+                        if ref is not None and k not in packed_index_keys:
+                            for i, x in enumerate(slots):
+                                if x is None:
+                                    slots[i] = np.zeros((1, *ref.shape[1:]), dtype=ref.dtype)
+                        parts = [x for x in slots if isinstance(x, np.ndarray)]
+                        if debug_merge and len(parts) > 0:
+                            shapes = [tuple(c.shape) for c in parts]
+                            if len(set(shapes)) != 1:
+                                print(f"[DEBUG][merge] key={k} reordered_shapes={shapes}")
+                        if len(parts) > 0:
+                            final[k] = _cat_arrays_with_auto_pad(parts, key=k)
+                            continue
+                    if len(extra) > 0:
+                        final[k] = _cat_arrays_with_auto_pad(extra, key=k)
                     continue
 
                 if isinstance(example, list):
@@ -544,6 +690,21 @@ class OmniAutoProcessorCollator:
         # attach metadata
         qry_batch["valid_example_mask"] = torch.tensor(valid, dtype=torch.bool)
         pos_batch["valid_example_mask"] = torch.tensor(valid, dtype=torch.bool)
+
+        # Optional: preserve candidate identity for multi-positive contrastive loss.
+        pair_ids = []
+        has_pair_id = False
+        for ex in examples:
+            pid = ex.get("pair_id", None) if isinstance(ex, dict) else None
+            if pid is None:
+                pair_ids.append(-1)
+            else:
+                has_pair_id = True
+                pair_ids.append(int(pid))
+        if has_pair_id:
+            pair_id_tensor = torch.tensor(pair_ids, dtype=torch.long)
+            qry_batch["pair_id"] = pair_id_tensor
+            pos_batch["pair_id"] = pair_id_tensor
 
         # for debug / hash you can still attach raw texts if you want
         qry_batch["text"] = q_texts

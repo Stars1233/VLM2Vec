@@ -19,6 +19,7 @@ import shutil
 from functools import partial
 from typing import Any, Dict, Optional, List
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -33,11 +34,11 @@ import yaml
 # Import from VLM2Vec project
 from src.arguments import ModelArguments, DataArguments, TrainingArguments as VLMTrainingArguments
 from src.loss import SimpleContrastiveLoss, DistributedContrastiveLoss
-from src.data.collator.train_collator import MultimodalDataCollator
+from src.data.collator.train_collator_omni import OmniAutoProcessorCollator
 from src.data.loader.mixed_dataset import init_mixed_dataset
 from src.model.processor import load_processor, get_backbone_name
-from src.model.vlm_backbone.omni_embed import OmniEmbedForConditionalGeneration
-from src.model.vlm_backbone.omni_embed.qwen2_5omni_backnone import load_qwen2_5omni_thinker
+from src.model.olm_backbone.qwen2_5_moni.qwen2_5omni_model_load import load_qwen2_5omni_thinker
+from src.utils.dist_utils import ddp_all_gather_variable
 
 logger = logging.get_logger(__name__)
 
@@ -47,6 +48,14 @@ logger = logging.get_logger(__name__)
 # =========================
 def is_ddp_ready() -> bool:
     return dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1
+
+
+def info_nce_loss(q_reps: torch.Tensor, p_reps: torch.Tensor, temperature: float) -> torch.Tensor:
+    q = F.normalize(q_reps, dim=-1)
+    p = F.normalize(p_reps, dim=-1)
+    scores = q @ p.t()
+    target = torch.arange(scores.size(0), device=scores.device)
+    return F.cross_entropy(scores / float(temperature), target)
 
 
 # =========================
@@ -121,9 +130,18 @@ def set_trainable_for_embedding(
         for name, p in model.named_parameters():
             if "talker." in name:
                 continue
-            if "thinker.visual." in name or "thinker.audio_tower." in name or "thinker.lm_head." in name:
+            if (
+                "thinker.visual." in name
+                or "thinker.audio_tower." in name
+                or "thinker.lm_head." in name
+                or "visual." in name
+                or "audio_tower." in name
+                or "lm_head." in name
+            ):
                 continue
             if "thinker.model." in name or "base_model.model." in name or name.startswith("model."):
+                p.requires_grad = True
+            elif name.startswith("base."):
                 p.requires_grad = True
 
     # optional: if you have projection/adapters you want to tune (rarely needed if you only want LLM)
@@ -137,11 +155,11 @@ def set_trainable_for_embedding(
     for name, p in model.named_parameters():
         if "talker." in name:
             p.requires_grad = False
-        if "thinker.visual." in name:
+        if "thinker.visual." in name or "visual." in name:
             p.requires_grad = False
-        if "thinker.audio_tower." in name:
+        if "thinker.audio_tower." in name or "audio_tower." in name:
             p.requires_grad = False
-        if "thinker.lm_head." in name:
+        if "thinker.lm_head." in name or "lm_head." in name:
             p.requires_grad = False
 
 
@@ -232,7 +250,7 @@ class OmniEmbedder(nn.Module):
             else:
                 base_model = get_peft_model(base_model, lora_config)
 
-        self.model = OmniEmbedForConditionalGeneration(base_model)
+        self.model = base_model
 
         if full_finetune:
             for _, p in self.model.named_parameters():
@@ -290,33 +308,42 @@ class OmniEmbedder(nn.Module):
                     stacked.append(v if isinstance(v, torch.Tensor) else torch.as_tensor(v))
             return torch.stack(stacked, dim=0)
 
-        for key in ("input_features", "audio_attention_mask", "audio_feature_lengths"):
+        if "audio_attention_mask" in inputs and "feature_attention_mask" not in inputs:
+            inputs["feature_attention_mask"] = inputs.pop("audio_attention_mask")
+
+        for key in ("input_features", "feature_attention_mask", "audio_feature_lengths"):
             if key in inputs:
                 inputs[key] = _stack_with_fill(inputs[key])
 
-        if isinstance(inputs.get("input_features"), torch.Tensor) and isinstance(inputs.get("audio_attention_mask"), torch.Tensor):
+        # Some processor paths return batched numpy arrays (especially audio masks).
+        # Convert them to tensors before shape checks / model forward.
+        for k, v in list(inputs.items()):
+            if isinstance(v, np.ndarray) and v.dtype != np.object_:
+                inputs[k] = torch.as_tensor(v)
+
+        if isinstance(inputs.get("input_features"), torch.Tensor) and isinstance(inputs.get("feature_attention_mask"), torch.Tensor):
             feat_t = inputs["input_features"].shape[-1]
-            mask_t = inputs["audio_attention_mask"].shape[-1]
+            mask_t = inputs["feature_attention_mask"].shape[-1]
             if feat_t != mask_t:
                 min_t = min(feat_t, mask_t)
                 inputs["input_features"] = inputs["input_features"][..., :min_t]
-                inputs["audio_attention_mask"] = inputs["audio_attention_mask"][:, :min_t]
+                inputs["feature_attention_mask"] = inputs["feature_attention_mask"][:, :min_t]
             if inputs["input_features"].shape[-1] == 0:
                 inputs.pop("input_features", None)
-                inputs.pop("audio_attention_mask", None)
+                inputs.pop("feature_attention_mask", None)
                 inputs.pop("audio_feature_lengths", None)
             else:
-                audio_lens = inputs["audio_attention_mask"].sum(dim=1)
+                audio_lens = inputs["feature_attention_mask"].sum(dim=1)
                 if torch.any(audio_lens <= 0):
                     inputs.pop("input_features", None)
-                    inputs.pop("audio_attention_mask", None)
+                    inputs.pop("feature_attention_mask", None)
                     inputs.pop("audio_feature_lengths", None)
 
         for k, v in list(inputs.items()):
             if isinstance(v, torch.Tensor):
                 inputs[k] = v.to(dev)
 
-        if not hasattr(self, "_debug_fwd_once"):
+        if not hasattr(self, "_debug_fwd_once") and os.environ.get("VLM2VEC_DEBUG"):
             self._debug_fwd_once = True
             devs = {k: (v.device if isinstance(v, torch.Tensor) else type(v)) for k, v in inputs.items()}
             shapes = {k: (tuple(v.shape) if isinstance(v, torch.Tensor) else None) for k, v in inputs.items()}
@@ -328,6 +355,10 @@ class OmniEmbedder(nn.Module):
             outputs = self.model(**inputs, output_hidden_states=True, return_dict=True, use_cache=False)
         except TypeError:
             outputs = self.model(**inputs)
+
+        if hasattr(outputs, "embeddings") and outputs.embeddings is not None:
+            emb = outputs.embeddings
+            return emb
 
         hs = self._extract_hidden(outputs)
 
@@ -401,7 +432,84 @@ class OmniEmbedTrainer(Trainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         qry_batch, tgt_batch = inputs
-        loss = model(qry=qry_batch, tgt=tgt_batch)
+        real_model = model.module if hasattr(model, "module") else model
+        loss = None
+        valid_mask = qry_batch.get("valid_example_mask", None)
+        if valid_mask is None:
+            valid_mask = tgt_batch.get("valid_example_mask", None)
+
+        if valid_mask is not None:
+            if isinstance(valid_mask, list):
+                valid_mask = torch.tensor(valid_mask, dtype=torch.bool)
+            elif isinstance(valid_mask, torch.Tensor):
+                valid_mask = valid_mask.bool()
+            else:
+                valid_mask = None
+
+        if valid_mask is not None:
+            if isinstance(valid_mask, torch.Tensor):
+                valid_mask = valid_mask.to(next(real_model.parameters()).device)
+            valid_idx = torch.nonzero(valid_mask, as_tuple=False).squeeze(1)
+            if valid_idx.numel() == 0:
+                loss = torch.tensor(0.0, device=next(real_model.parameters()).device)
+            else:
+                def _slice_batch(batch, idxs):
+                    sliced = {}
+                    for key, val in batch.items():
+                        if key == "valid_example_mask":
+                            continue
+                        if isinstance(val, torch.Tensor) and val.size(0) == valid_mask.size(0):
+                            sliced[key] = val.index_select(0, idxs)
+                        elif isinstance(val, list) and len(val) == valid_mask.size(0):
+                            sliced[key] = [val[i] for i in idxs.tolist()]
+                        else:
+                            sliced[key] = val
+                    return sliced
+
+                qry_batch = _slice_batch(qry_batch, valid_idx)
+                tgt_batch = _slice_batch(tgt_batch, valid_idx)
+
+        if loss is None:
+            q_reps = real_model.encode(qry_batch)
+            p_reps = real_model.encode(tgt_batch)
+            if q_reps is None or p_reps is None:
+                loss = torch.tensor(0.0, device=next(real_model.parameters()).device)
+            else:
+                temperature = getattr(real_model, "temperature", 0.02)
+                if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
+                    # Gather global negatives; keep only local reps with grad, detach remote reps.
+                    world = dist.get_world_size()
+                    rank = dist.get_rank()
+                    device = q_reps.device
+                    local_b = torch.tensor([q_reps.size(0)], device=device, dtype=torch.long)
+                    sizes = [torch.zeros_like(local_b) for _ in range(world)]
+                    dist.all_gather(sizes, local_b)
+                    sizes = [int(s.item()) for s in sizes]
+                    max_b = max(sizes)
+
+                    if p_reps.size(0) < max_b:
+                        pad = torch.zeros((max_b - p_reps.size(0), p_reps.size(1)), device=device, dtype=p_reps.dtype)
+                        p_pad = torch.cat([p_reps, pad], dim=0)
+                    else:
+                        p_pad = p_reps
+
+                    gathered = [torch.empty_like(p_pad) for _ in range(world)]
+                    dist.all_gather(gathered, p_pad)
+
+                    parts = []
+                    for r, (g, b) in enumerate(zip(gathered, sizes)):
+                        if r == rank:
+                            parts.append(p_reps)
+                        else:
+                            parts.append(g[:b].detach())
+                    all_p = torch.cat(parts, dim=0)
+
+                    offset = sum(sizes[:rank])
+                    target = torch.arange(q_reps.size(0), device=device) + offset
+                    scores = q_reps @ all_p.t()
+                    loss = F.cross_entropy(scores / float(temperature), target)
+                else:
+                    loss = info_nce_loss(q_reps, p_reps, temperature)
         if not hasattr(self, "_debug_loss_once"):
             self._debug_loss_once = True
             q_ids = qry_batch.get("input_ids")
@@ -422,11 +530,59 @@ class OmniEmbedTrainer(Trainer):
                 (qry_batch.get("input_features") is not None) or (tgt_batch.get("input_features") is not None),
             )
             print("num_pairs", q_size * p_size, "num_pos", min(q_size, p_size))
+        if not hasattr(self, "_debug_step_counter"):
+            self._debug_step_counter = 0
+        self._debug_step_counter += 1
+        if self._debug_step_counter % 100 == 0:
+            q_ids = qry_batch.get("input_ids")
+            p_ids = tgt_batch.get("input_ids")
+            q_size = int(q_ids.shape[0]) if isinstance(q_ids, torch.Tensor) else 0
+            p_size = int(p_ids.shape[0]) if isinstance(p_ids, torch.Tensor) else 0
+            num_pairs = q_size * p_size
+            empty_pairs = num_pairs == 0
+            loss_fp = float(loss.detach().cpu().item()) if isinstance(loss, torch.Tensor) else float(loss)
+
+            try:
+                q = model.encode(qry_batch)
+                p = model.encode(tgt_batch)
+                logits = torch.matmul(q, p.transpose(0, 1))
+                top1 = (logits.argmax(dim=1) == torch.arange(logits.size(0), device=logits.device)).float().mean()
+                cos_diag = torch.sum(F.normalize(q, dim=-1) * F.normalize(p, dim=-1), dim=-1)
+                cos_stats = (
+                    float(cos_diag.mean().item()),
+                    float(cos_diag.min().item()),
+                    float(cos_diag.max().item()),
+                )
+            except Exception:
+                top1 = torch.tensor(float("nan"))
+                cos_stats = (float("nan"), float("nan"), float("nan"))
+
+            def _hash_tensor(t):
+                if not isinstance(t, torch.Tensor):
+                    return None
+                return hash(t.detach().cpu().contiguous().numpy().tobytes())
+
+            def _hash_text_list(texts):
+                if not isinstance(texts, list):
+                    return None
+                flat = [str(t) for t in texts]
+                return hash(tuple(flat))
+
+            q_texts = qry_batch.get("text", None)
+            p_texts = tgt_batch.get("text", None)
+            q_text_hash = _hash_text_list(q_texts)
+            p_text_hash = _hash_text_list(p_texts)
+
+            print("loss_full_precision", f"{loss_fp:.12f}", "empty_pairs", empty_pairs)
+            print("num_pairs", num_pairs, "effective_B", min(q_size, p_size), "top1_acc", float(top1))
+            print("hash_text_q", q_text_hash, "hash_text_p", p_text_hash)
+            print("hash_tokens_q", _hash_tensor(q_ids), "hash_tokens_p", _hash_tensor(p_ids))
+            print("cos_qp_mean/min/max", f"{cos_stats[0]:.6f}", f"{cos_stats[1]:.6f}", f"{cos_stats[2]:.6f}")
         if isinstance(loss, torch.Tensor):
-            device = next(model.parameters()).device
+            device = next(real_model.parameters()).device
             if loss.device != device:
                 loss = loss.to(device)
-        loss = loss / float(self._dist_loss_scale_factor)
+        loss = loss / float(1.0)
         return (loss, None) if return_outputs else loss
 
     def get_train_dataloader(self) -> DataLoader:
@@ -701,7 +857,12 @@ def main():
                     task_config["image_dir"] = os.path.join(data_args.data_basedir, image_dir)
         train_dataset = init_mixed_dataset(dataset_config, model_args, data_args, training_args)
 
-    train_collator = MultimodalDataCollator(processor, model_args, data_args, training_args)
+    train_collator = OmniAutoProcessorCollator(
+        processor=processor,
+        data_args=data_args,
+        model_args=model_args,
+        training_args=training_args,
+    )
 
     trainer = OmniEmbedTrainer(
         model=model,

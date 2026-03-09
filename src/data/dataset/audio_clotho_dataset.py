@@ -1,6 +1,7 @@
 """
 Clotho 文本->音频检索数据集处理（训练/评测共用）。
-- 每条音频的 5 条 caption 展开为 5 条查询。
+- 训练：按音频聚合，每条样本包含该音频的多条 caption。
+- 评测：每条音频的 5 条 caption 展开为 5 条查询。
 """
 
 import os
@@ -44,6 +45,33 @@ def _expand_clotho_rows(csv_path: str, audio_dir: str) -> List[Dict[str, str]]:
     return records
 
 
+def _group_clotho_rows(csv_path: str, audio_dir: str) -> List[Dict[str, Any]]:
+    """按音频聚合 Clotho CSV，每条记录包含该音频所有可用 captions。"""
+    df = pd.read_csv(csv_path)
+    records: List[Dict[str, Any]] = []
+    for _, row in df.iterrows():
+        file_name = row["file_name"]
+        audio_path = os.path.join(audio_dir, file_name)
+        captions: List[str] = []
+        for i in range(1, 6):
+            cap = row.get(f"caption_{i}")
+            if not isinstance(cap, str):
+                continue
+            cap = cap.strip()
+            if cap:
+                captions.append(cap)
+        if not captions:
+            continue
+        records.append(
+            {
+                "captions": captions,
+                "audio_path": audio_path,
+                "file_name": file_name,
+            }
+        )
+    return records
+
+
 @AutoPairDataset.register("load_audio_clotho_dataset")
 def load_audio_clotho_dataset(*args: Any, **kwargs: Any):
     """
@@ -72,8 +100,8 @@ def load_audio_clotho_dataset(*args: Any, **kwargs: Any):
     assert os.path.isdir(audio_dir), f"未找到音频目录: {audio_dir}"
 
     print_master(f"[Clotho] loading csv={csv_path}, audio_dir={audio_dir}")
-    records = _expand_clotho_rows(csv_path, audio_dir)
-    print_master(f"[Clotho] 共生成样本数: {len(records)}")
+    records = _group_clotho_rows(csv_path, audio_dir)
+    print_master(f"[Clotho] 共生成音频样本数: {len(records)}")
 
     query_texts, query_images, query_audios = [], [], []
     pos_texts, pos_images, pos_audios = [], [], []
@@ -85,10 +113,17 @@ def load_audio_clotho_dataset(*args: Any, **kwargs: Any):
             continue
         if not _is_valid_audio_path(audio_path):
             continue
-        query_text = build_query_text("Clotho", r["text"])
-        assert isinstance(query_text, list) and len(query_text) == 1 and isinstance(query_text[0], str) and query_text[0].strip()
 
-        query_texts.append(query_text)
+        # Store all processed captions; collator will randomly pick one each step.
+        query_text_candidates: List[str] = []
+        for text in r["captions"]:
+            query_text = build_query_text("Clotho", text)
+            assert isinstance(query_text, list) and len(query_text) == 1 and isinstance(query_text[0], str) and query_text[0].strip()
+            query_text_candidates.append(query_text[0])
+        if not query_text_candidates:
+            continue
+
+        query_texts.append(query_text_candidates)
         query_images.append(None)
         query_audios.append(None)
 
@@ -96,7 +131,7 @@ def load_audio_clotho_dataset(*args: Any, **kwargs: Any):
         pos_images.append(None)
         pos_audios.append({"path": audio_path, "bytes": None, "start": None, "end": None})
 
-        dataset_infos.append({"file_name": r["file_name"]})
+        dataset_infos.append({"file_name": r["file_name"], "num_captions": len(query_text_candidates)})
 
     dataset = datasets.Dataset.from_dict(
         {

@@ -46,6 +46,25 @@ def _seg_id(fp: str, start: float, end: float) -> str:
     return f"{fp}|{start:.3f}-{end:.3f}"
 
 
+def _normalize_segment(start: float, end: float, audio_dur: float, min_dur: float = 0.05) -> Tuple[float, float]:
+    """
+    Ensure a valid non-empty segment within [0, audio_dur].
+    Some raw labels in TUTSound may have onset==offset.
+    """
+    s = max(0.0, float(start))
+    e = float(end)
+    if e <= s:
+        e = s + float(min_dur)
+    if e > audio_dur:
+        e = audio_dur
+    if e <= s:
+        s = max(0.0, audio_dur - float(min_dur))
+        e = audio_dur
+    if e <= s:
+        e = s + 1e-3
+    return s, e
+
+
 def build_tutsound_audio_dataset(path_info: Tuple[str, str, str], **kwargs):
     dataset_path, subset, split = path_info
     base_dir = os.path.join(dataset_path, "TUT-sound-events-2017-development")
@@ -105,6 +124,15 @@ def build_tutsound_audio_dataset(path_info: Tuple[str, str, str], **kwargs):
             raise RuntimeError(f"Failed to read audio info for {abs_path}: {e}") from e
 
         audio_dur = float(audio_info.num_frames) / float(audio_info.sample_rate)
+        normalized_events = []
+        for ev in gt_events:
+            seg_s, seg_e = _normalize_segment(ev["onset"], ev["offset"], audio_dur=audio_dur)
+            normalized_events.append({
+                "label": ev["label"],
+                "onset": seg_s,
+                "offset": seg_e,
+            })
+        gt_events = normalized_events
         gt_segments = [(float(ev["onset"]), float(ev["offset"])) for ev in gt_events]
 
         # 背景滑窗候选（固定长度，最后一窗不满则丢弃）

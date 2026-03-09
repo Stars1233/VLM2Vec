@@ -12,6 +12,12 @@ class Qwen2_5OmniEmbeddingProcessor:
         base = AutoProcessor.from_pretrained(pretrained_model_name_or_path, **kwargs)
         return cls(base)
 
+    def save_pretrained(self, save_directory, **kwargs):
+        return self.base.save_pretrained(save_directory, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self.base, name)
+
     def __call__(
         self,
         text=None,

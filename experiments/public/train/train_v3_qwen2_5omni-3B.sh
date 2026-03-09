@@ -22,9 +22,9 @@ mkdir -p $EXP_DIR/wandb
 rm -rf $EXP_DIR/wandb/*
 
 cd /data/mengrui/OLM2Vec/OLM2Vec
-cmd="CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+cmd="CUDA_VISIBLE_DEVICES=0,1,2,3,5,6,7 \
 torchrun \
---nproc_per_node=8 \
+--nproc_per_node=7 \
 --master_port=2209 \
 --max_restarts=0 \
 train_omni.py \
@@ -36,8 +36,10 @@ train_omni.py \
 --pooling mean \
 --normalize True \
 --temperature 0.02 \
+--loss_stage mixed \
+--loss_alpha 0.5 \
 --dataloader_num_workers 8 \
---dataset_config experiments/public/train/train_audio.yaml \
+--dataset_config experiments/public/train/train_alltasks-v3.yaml \
 --run_name \$EXP_NAME \
 --output_dir \$EXP_DIR \
 --grad_cache True \
@@ -47,14 +49,14 @@ train_omni.py \
 --interleave_batch_size 8 \
 --lr_scheduler_type linear \
 --learning_rate 5e-5 \
---max_steps 5000 \
+--max_steps 15000 \
 --warmup_steps 100 \
 --save_steps 200 \
 --logging_steps 1 \
 --save_safetensors True \
 --remove_unused_columns False \
 --resume_from auto \
---report_to none \
+--report_to wandb \
 2>&1 | tee \$EXP_DIR/train.log"
 
 echo $cmd

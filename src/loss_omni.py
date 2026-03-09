@@ -86,8 +86,11 @@ class JEPALoss(nn.Module):
         self.reduction = reduction
 
     def forward(self, z_c: Tensor, z_t: Tensor) -> Tensor:
+        # Align dtype/device with predictor params to avoid bf16/fp32 matmul mismatch.
+        ref_param = next(self.predictor.parameters())
+        z_c = z_c.to(device=ref_param.device, dtype=ref_param.dtype)
         pred = self.predictor(z_c)
-        tgt = z_t.detach()
+        tgt = z_t.detach().to(device=pred.device, dtype=pred.dtype)
 
         if self.normalize:
             pred = l2norm(pred)
@@ -254,7 +257,7 @@ class InExampleContrastiveLoss(nn.Module):
             raise ValueError(f"x and y batch mismatch: x={x.shape}, y={y.shape}")
 
         # logits: [B,K]
-        logits = torch.einsum("bd,bkd->bk", x, y) / max(self.temperature, 1e-8)
+        logits = torch.einsum("bd,bkd->bk", x, y) * self.temperature
         labels = torch.zeros(B, device=x.device, dtype=torch.long)
         preds = torch.argmax(logits, dim=-1)
         loss = F.cross_entropy(logits, labels, reduction=reduction)

@@ -48,6 +48,25 @@ def _seg_id(fp: str, start: float, end: float) -> str:
     return f"{fp}|{start:.3f}-{end:.3f}"
 
 
+def _normalize_segment(start: float, end: float, audio_dur: float, min_dur: float = 0.05) -> Tuple[float, float]:
+    """
+    Ensure a valid non-empty segment within [0, audio_dur].
+    Some raw labels in TUTSound may have onset==offset.
+    """
+    s = max(0.0, float(start))
+    e = float(end)
+    if e <= s:
+        e = s + float(min_dur)
+    if e > audio_dur:
+        e = audio_dur
+    if e <= s:
+        s = max(0.0, audio_dur - float(min_dur))
+        e = audio_dur
+    if e <= s:
+        e = s + 1e-3
+    return s, e
+
+
 @AutoPairDataset.register("build_tutsound_audio_dataset")
 def build_tutsound_audio_dataset(*args: Any, **kwargs: Any):
     """
@@ -134,6 +153,15 @@ def build_tutsound_audio_dataset(*args: Any, **kwargs: Any):
             continue
 
         audio_dur = float(audio_info.num_frames) / float(audio_info.sample_rate)
+        normalized_events = []
+        for ev in gt_events:
+            seg_s, seg_e = _normalize_segment(ev["onset"], ev["offset"], audio_dur=audio_dur)
+            normalized_events.append({
+                "label": ev["label"],
+                "onset": seg_s,
+                "offset": seg_e,
+            })
+        gt_events = normalized_events
         gt_segments = [(float(ev["onset"]), float(ev["offset"])) for ev in gt_events]
 
         # 背景滑窗候选（可选，用于负例采样）
@@ -169,7 +197,14 @@ def build_tutsound_audio_dataset(*args: Any, **kwargs: Any):
             
             query_texts.append(query_text)
             query_images.append(None)
-            query_audios.append(None)  # Query 是文本，不需要音频
+            # Align training query modality with eval grounding:
+            # query is full audio + event text, target is a grounded segment.
+            query_audios.append({
+                "path": abs_path,
+                "bytes": None,
+                "start": 0.0,
+                "end": float(audio_dur),
+            })
 
             # Positive: 对应的 GT 音频片段
             pos_texts.append(POS_TEXT_AUDIO)

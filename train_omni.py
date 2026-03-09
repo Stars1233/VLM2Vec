@@ -103,13 +103,32 @@ def main():
         model = model.to(training_args.device)
     log_trainable_stats(model)
 
+    def _resolve_dataset_path(raw_path: str, data_basedir: str = None) -> str:
+        if not isinstance(raw_path, str) or not raw_path:
+            return raw_path
+        resolved = os.path.expanduser(os.path.expandvars(raw_path))
+        if data_basedir and not os.path.isabs(resolved):
+            return os.path.join(data_basedir, resolved)
+        return resolved
+
     with open(data_args.dataset_config, 'r') as yaml_file:
         dataset_config = yaml.safe_load(yaml_file)
-        if data_args.data_basedir:
-            for _, task_config in dataset_config.items():
-                image_dir = task_config.get('image_dir')
-                if image_dir and not os.path.isabs(image_dir):
-                    task_config['image_dir'] = os.path.join(data_args.data_basedir, image_dir)
+
+        data_basedir = (
+            os.path.expanduser(os.path.expandvars(data_args.data_basedir))
+            if data_args.data_basedir else None
+        )
+
+        # Resolve path-like fields so one config can migrate across machines:
+        # use --data_basedir as a common dataset root for relative paths.
+        path_keys = {"data_path", "image_dir", "frame_root", "audio_root", "video_root"}
+        for _, task_config in dataset_config.items():
+            if not isinstance(task_config, dict):
+                continue
+            for key in path_keys:
+                if key in task_config and isinstance(task_config[key], str):
+                    task_config[key] = _resolve_dataset_path(task_config[key], data_basedir=data_basedir)
+
         train_dataset = init_mixed_dataset(dataset_config, model_args, data_args, training_args)
 
     train_collator = OmniAutoProcessorCollator(

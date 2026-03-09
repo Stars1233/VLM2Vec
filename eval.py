@@ -90,14 +90,51 @@ def encode_embeddings(
                     pixel_values_videos = inputs.get("pixel_values_videos", None)
                     video_grid_thw = inputs.get("video_grid_thw", None)
 
-                    def _get_item(value, idx):
+                    def _build_visual_spans(patch_tensor, grid_tensor):
+                        """
+                        Build per-sample [start, end) spans for flattened visual patches.
+                        patch_tensor is expected to be [sum_i(t_i*h_i*w_i), hidden_dim].
+                        grid_tensor is expected to be [batch_size, 3].
+                        """
+                        if not isinstance(patch_tensor, torch.Tensor):
+                            return None
+                        if not isinstance(grid_tensor, torch.Tensor):
+                            return None
+                        if grid_tensor.dim() != 2 or grid_tensor.shape[1] != 3:
+                            return None
+                        if grid_tensor.shape[0] != batch_size:
+                            return None
+
+                        counts = (grid_tensor[:, 0].long() * grid_tensor[:, 1].long() * grid_tensor[:, 2].long()).tolist()
+                        if any(c < 0 for c in counts):
+                            return None
+
+                        total = int(sum(counts))
+                        if patch_tensor.shape[0] != total:
+                            return None
+
+                        spans = []
+                        start = 0
+                        for c in counts:
+                            end = start + int(c)
+                            spans.append((start, end))
+                            start = end
+                        return spans
+
+                    image_spans = _build_visual_spans(pixel_values, image_grid_thw)
+                    video_spans = _build_visual_spans(pixel_values_videos, video_grid_thw)
+
+                    def _get_batch_aligned_item(value, idx):
                         if value is None:
                             return None
                         if isinstance(value, list):
-                            return value[idx]
+                            if len(value) == batch_size:
+                                return value[idx]
+                            return None
                         if isinstance(value, torch.Tensor):
-                            return value[idx]
-                        # 有些 processor 可能给 dict（不常见），这里尽量不支持，直接 None
+                            if value.dim() > 0 and value.shape[0] == batch_size:
+                                return value[idx]
+                            return None
                         return None
 
                     def _grid_to_key(grid_item):
@@ -123,13 +160,12 @@ def encode_embeddings(
                         return str(grid_item)
 
                     def _bucket_key(i):
-                        img_pv = _get_item(pixel_values, i)
-                        img_gt = _get_item(image_grid_thw, i)
-                        vid_pv = _get_item(pixel_values_videos, i)
-                        vid_gt = _get_item(video_grid_thw, i)
-
-                        has_img = (img_pv is not None) or (img_gt is not None)
-                        has_vid = (vid_pv is not None) or (vid_gt is not None)
+                        # For flattened visual patch tensors, never probe modality by pixel_values[_videos][i],
+                        # because dim0 is token length rather than batch size.
+                        img_gt = _get_batch_aligned_item(image_grid_thw, i)
+                        vid_gt = _get_batch_aligned_item(video_grid_thw, i)
+                        has_img = img_gt is not None
+                        has_vid = vid_gt is not None
 
                         if has_vid:
                             return ("vid", _grid_to_key(vid_gt))
@@ -146,20 +182,43 @@ def encode_embeddings(
                     # 2) 逐桶 forward，并把 reps 写回原顺序
                     reps_out = torch.empty((batch_size, model.rep_dim), device=device, dtype=torch.float32)
 
-                    def _slice_value(v, idxs):
+                    def _slice_flat_visual(v, idxs, spans):
+                        if spans is None:
+                            return None
+                        pieces = []
+                        for j in idxs:
+                            s, e = spans[j]
+                            pieces.append(v[s:e])
+                        if len(pieces) == 0:
+                            return v.new_empty((0, *v.shape[1:]))
+                        return torch.cat(pieces, dim=0)
+
+                    def _slice_value(k, v, idxs):
                         if v is None:
                             return None
+                        if k == "pixel_values" and isinstance(v, torch.Tensor):
+                            sliced = _slice_flat_visual(v, idxs, image_spans)
+                            if sliced is not None:
+                                return sliced
+                        if k == "pixel_values_videos" and isinstance(v, torch.Tensor):
+                            sliced = _slice_flat_visual(v, idxs, video_spans)
+                            if sliced is not None:
+                                return sliced
                         if isinstance(v, torch.Tensor):
-                            return v[idxs]
+                            if v.dim() > 0 and v.shape[0] == batch_size:
+                                return v[idxs]
+                            return v
                         if isinstance(v, list):
-                            return [v[j] for j in idxs]
+                            if len(v) == batch_size:
+                                return [v[j] for j in idxs]
+                            return v
                         return None
 
                     def _slice_inputs(inputs_dict, idxs):
                         sub = {}
                         for kk, vv in inputs_dict.items():
                             # dataset_infos 不在 inputs 里，这里只处理 tensor/list/None
-                            sub[kk] = _slice_value(vv, idxs)
+                            sub[kk] = _slice_value(kk, vv, idxs)
                         return sub
 
                     for _, idxs in buckets.items():
@@ -451,7 +510,19 @@ def main():
             gt_infos = [json.loads(l) for l in open(dataset_info_path)]
             pred_dicts = []
 
-            rank_against_all_candidates = task_config.get("eval_type", "global") == "global"
+            eval_type = str(task_config.get("eval_type", "global")).strip().lower()
+            rank_against_all_candidates = eval_type == "global"
+            if not rank_against_all_candidates:
+                missing_local_cands = any(
+                    not isinstance(info.get("cand_names", None), list) or len(info.get("cand_names", [])) == 0
+                    for info in gt_infos
+                )
+                if missing_local_cands:
+                    print_master(
+                        f"[{dataset_name}] eval_type='{eval_type}' but some queries have empty cand_names; "
+                        f"fallback to global ranking."
+                    )
+                    rank_against_all_candidates = True
             if rank_against_all_candidates:
                 cand_keys = list(cand_embed_dict.keys())
                 cand_embeds = np.stack([cand_embed_dict[key] for key in cand_keys])

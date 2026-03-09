@@ -122,6 +122,48 @@ def _cat_tensors_with_auto_pad(parts, key=None):
     return torch.cat(padded_parts, dim=0)
 
 
+def _cat_arrays_with_auto_pad(parts, key=None):
+    if len(parts) == 0:
+        raise ValueError("Cannot concatenate empty ndarray parts.")
+    if len(parts) == 1:
+        return parts[0]
+
+    normalized_parts = []
+    for p in parts:
+        if not isinstance(p, np.ndarray):
+            raise TypeError(f"Expected ndarray part, got {type(p)} for key={key}.")
+        normalized_parts.append(p.reshape(1) if p.ndim == 0 else p)
+    parts = normalized_parts
+
+    ndim = parts[0].ndim
+    if any(p.ndim != ndim for p in parts):
+        shapes = [tuple(p.shape) for p in parts]
+        raise RuntimeError(f"Cannot merge ndarrays with different ranks for key={key}: {shapes}")
+
+    try:
+        return np.concatenate(parts, axis=0)
+    except ValueError:
+        if ndim == 1:
+            return np.concatenate(parts, axis=0)
+
+    max_tail = [max(p.shape[d] for p in parts) for d in range(1, ndim)]
+    if all(all(p.shape[d] == max_tail[d - 1] for d in range(1, ndim)) for p in parts):
+        return np.concatenate(parts, axis=0)
+
+    pad_value = False if parts[0].dtype == np.bool_ else 0
+    padded_parts = []
+    for p in parts:
+        target_shape = (p.shape[0], *max_tail)
+        if tuple(p.shape) == target_shape:
+            padded_parts.append(p)
+            continue
+        padded = np.full(target_shape, pad_value, dtype=p.dtype)
+        slices = (slice(None),) + tuple(slice(0, p.shape[d]) for d in range(1, ndim))
+        padded[slices] = p
+        padded_parts.append(padded)
+    return np.concatenate(padded_parts, axis=0)
+
+
 def _merge_group_outputs(ordered_groups, total_batch_size):
     """
     Merge per-group processor outputs back to original sample order.
@@ -131,6 +173,19 @@ def _merge_group_outputs(ordered_groups, total_batch_size):
     all_keys = set()
     for _, out in ordered_groups:
         all_keys.update(out.keys())
+    # These keys are packed by modality count (num_images/num_videos), not by batch size.
+    # Filling missing rows with zeros breaks global image/video indices in Qwen2.5-Omni RoPE.
+    packed_index_keys = {
+        "image_grid_thw",
+        "video_grid_thw",
+        "video_second_per_grid",
+        # Audio features are also packed by num_audios (not always batch size).
+        # Filling missing rows with zeros can create invalid zero-length audio rows
+        # and crash Qwen2.5-Omni audio tower.
+        "input_features",
+        "feature_attention_mask",
+        "audio_feature_lengths",
+    }
 
     for key in all_keys:
         example = None
@@ -146,10 +201,13 @@ def _merge_group_outputs(ordered_groups, total_batch_size):
             slots = [None] * total_batch_size
             used_slots = False
             concat_parts = []
+            ref = None
             for items, out in ordered_groups:
                 v = out.get(key, None)
                 if v is None:
                     continue
+                if isinstance(v, torch.Tensor):
+                    ref = ref if ref is not None else v
                 if isinstance(v, torch.Tensor) and v.dim() > 0 and v.shape[0] == len(items):
                     used_slots = True
                     for row_i, item in enumerate(items):
@@ -160,12 +218,53 @@ def _merge_group_outputs(ordered_groups, total_batch_size):
                     concat_parts.append(v)
 
             if used_slots:
+                if ref is not None and key not in packed_index_keys:
+                    for i, x in enumerate(slots):
+                        if x is None:
+                            slots[i] = torch.zeros(
+                                (1, *ref.shape[1:]),
+                                device=ref.device,
+                                dtype=ref.dtype,
+                            )
                 parts = [x for x in slots if isinstance(x, torch.Tensor)]
                 if len(parts) > 0:
                     merged[key] = _cat_tensors_with_auto_pad(parts, key=key)
                     continue
             if len(concat_parts) > 0:
                 merged[key] = _cat_tensors_with_auto_pad(concat_parts, key=key)
+            continue
+
+        if isinstance(example, np.ndarray):
+            slots = [None] * total_batch_size
+            used_slots = False
+            concat_parts = []
+            ref = None
+            for items, out in ordered_groups:
+                v = out.get(key, None)
+                if v is None:
+                    continue
+                if isinstance(v, np.ndarray):
+                    ref = ref if ref is not None else v
+                if isinstance(v, np.ndarray) and v.ndim > 0 and v.shape[0] == len(items):
+                    used_slots = True
+                    for row_i, item in enumerate(items):
+                        orig_i = _item_to_orig_index(item)
+                        if 0 <= orig_i < total_batch_size:
+                            slots[orig_i] = v[row_i : row_i + 1]
+                elif isinstance(v, np.ndarray):
+                    concat_parts.append(v)
+
+            if used_slots:
+                if ref is not None and key not in packed_index_keys:
+                    for i, x in enumerate(slots):
+                        if x is None:
+                            slots[i] = np.zeros((1, *ref.shape[1:]), dtype=ref.dtype)
+                parts = [x for x in slots if isinstance(x, np.ndarray)]
+                if len(parts) > 0:
+                    merged[key] = _cat_arrays_with_auto_pad(parts, key=key)
+                    continue
+            if len(concat_parts) > 0:
+                merged[key] = _cat_arrays_with_auto_pad(concat_parts, key=key)
             continue
 
         if isinstance(example, list):
@@ -216,9 +315,24 @@ def _install_qwen_omni_warning_filters():
                 return False
             if "Unrecognized keys in `rope_scaling` for 'rope_type'='default': {'mrope_section'}" in msg:
                 return False
+            if msg.startswith("Unused or unrecognized kwargs:"):
+                # This warning is very noisy for omni multimodal preprocessing.
+                return False
             return True
 
-    root_logger.addFilter(_SuppressQwenOmniWarnings())
+    warning_filter = _SuppressQwenOmniWarnings()
+    target_loggers = [
+        root_logger,
+        logging.getLogger("transformers"),
+        logging.getLogger("transformers.image_utils"),
+        logging.getLogger("transformers.video_processing_utils"),
+    ]
+
+    for lg in target_loggers:
+        lg.addFilter(warning_filter)
+        for handler in lg.handlers:
+            handler.addFilter(warning_filter)
+
     root_logger._suppress_qwen_omni_warnings = True
 
 PHI3V = 'phi3_v'
@@ -910,6 +1024,25 @@ def Omni_process_fn(model_inputs: dict, processor, max_length=None):
     if not texts:
         raise ValueError("Omni_process_fn: at least one text is required.")
 
+    def _normalize_text_item(t):
+        # Keep tokenizer input shape stable: always return a single plain string.
+        if t is None:
+            return "None"
+        if isinstance(t, str):
+            s = t
+        elif isinstance(t, (list, tuple)):
+            if len(t) == 0:
+                s = "None"
+            else:
+                flat = [str(x).strip() for x in t if x is not None and str(x).strip()]
+                s = " ".join(flat) if flat else "None"
+        else:
+            s = str(t)
+        s = s.strip()
+        return s if s else "None"
+
+    texts = [_normalize_text_item(t) for t in texts]
+
     # Ensure all arrays have the same length as texts
     batch_size = len(texts)
     if images is None:
@@ -1097,7 +1230,6 @@ def Omni_process_fn(model_inputs: dict, processor, max_length=None):
         max_audio_frames = int(model_inputs.get("audio_max_frames", 1024))
         max_audio_samples = max_audio_frames * 160
     for text, image, video, audio in zip(texts, images, videos, audios):
-        text = str(text)
         if not text.strip():
             raise ValueError("Omni_process_fn: empty text is not allowed.")
 
@@ -1193,6 +1325,8 @@ def Omni_process_fn(model_inputs: dict, processor, max_length=None):
         kwargs = dict(
             text=sub_texts,
             return_tensors="pt",
+            truncation=True,
+            padding=True,
         )
         if group_key == "text_only":
             if max_length is None:
@@ -1216,7 +1350,9 @@ def Omni_process_fn(model_inputs: dict, processor, max_length=None):
         # For audio groups, all samples should have valid audio by construction
         if group_key in ["visual_audio", "audio_only"]:
             kwargs["audio"] = sub_audios  # All should be valid
-            # Don't pass sampling_rate directly - audio is already resampled
+            # Keep consistent with training collator: explicitly pass sampling rate.
+            # Without this, Qwen2.5-Omni may extract degenerate audio features (T=1).
+            kwargs["audio_kwargs"] = {"sampling_rate": int(target_sr)}
 
         outputs = base_processor(**kwargs)
         ordered_groups.append((sub, outputs))
@@ -1287,11 +1423,9 @@ def NVOmni_process_fn(model_inputs: dict, processor, max_length=None):
     # Build Qwen-Omni style documents with per-sample content.
     documents = []
     for idx, t in enumerate(texts):
+        # Keep multimodal placeholders at the front so right-side truncation does not
+        # drop <vision_start>/<image|video|audio> tokens and desync *_grid_thw.
         content = []
-        clean_text = _strip_special_tokens(t)
-        if not clean_text:
-            clean_text = " "
-        content.append({"type": "text", "text": clean_text})
 
         if images is not None and idx < len(images):
             img_item = images[idx]
@@ -1306,8 +1440,20 @@ def NVOmni_process_fn(model_inputs: dict, processor, max_length=None):
             vid_item = videos[idx]
             if vid_item is not None:
                 if isinstance(vid_item, list):
-                    vid_item = [_pad_to_min_image_size(frame, min_image_size) for frame in vid_item]
-                content.append({"type": "video", "video": vid_item})
+                    normalized_frames = []
+                    for frame in vid_item:
+                        if frame is None:
+                            continue
+                        if isinstance(frame, list):
+                            for nested_frame in frame:
+                                if nested_frame is None:
+                                    continue
+                                normalized_frames.append(_pad_to_min_image_size(nested_frame, min_image_size))
+                        else:
+                            normalized_frames.append(_pad_to_min_image_size(frame, min_image_size))
+                    vid_item = normalized_frames if normalized_frames else None
+                if vid_item is not None:
+                    content.append({"type": "video", "video": vid_item})
 
         if audios is not None and idx < len(audios):
             aud_item = audios[idx]
@@ -1317,6 +1463,11 @@ def NVOmni_process_fn(model_inputs: dict, processor, max_length=None):
                 aud_item = np.asarray(aud_item, dtype=np.float32)
             if aud_item is not None:
                 content.append({"type": "audio", "audio": aud_item})
+
+        clean_text = _strip_special_tokens(t)
+        if not clean_text:
+            clean_text = " "
+        content.append({"type": "text", "text": clean_text})
 
         documents.append([{"role": "user", "content": content}])
 
@@ -1393,10 +1544,19 @@ def NVOmni_process_fn(model_inputs: dict, processor, max_length=None):
             return _audios or None, _images or None, _videos or None
 
     def _apply_chat_template(doc):
-        if hasattr(processor, "apply_chat_template"):
-            return processor.apply_chat_template(doc, add_generation_prompt=False, tokenize=False)
-        if hasattr(processor, "tokenizer") and hasattr(processor.tokenizer, "apply_chat_template"):
-            return processor.tokenizer.apply_chat_template(doc, add_generation_prompt=False, tokenize=False)
+        # Try both wrapper processor and its underlying base/tokenizer objects.
+        candidates = [processor]
+        base = getattr(processor, "base", None)
+        if base is not None:
+            candidates.append(base)
+
+        for obj in candidates:
+            if hasattr(obj, "apply_chat_template"):
+                return obj.apply_chat_template(doc, add_generation_prompt=False, tokenize=False)
+            tok = getattr(obj, "tokenizer", None)
+            if tok is not None and hasattr(tok, "apply_chat_template"):
+                return tok.apply_chat_template(doc, add_generation_prompt=False, tokenize=False)
+
         raise AttributeError("Processor has no apply_chat_template; install a compatible AutoProcessor/tokenizer.")
 
     def _normalize_chat_text(value):
@@ -1415,13 +1575,31 @@ def NVOmni_process_fn(model_inputs: dict, processor, max_length=None):
             return x[0]
         return x
 
+    def _normalize_video_value(v):
+        # qwen_omni_utils.process_mm_info returns a list of videos.
+        # For single-video samples this is usually [[frame1, ...]], unwrap one level.
+        v = _unwrap_single(v)
+        if v is None:
+            return None
+        if isinstance(v, list):
+            flat = []
+            for item in v:
+                if item is None:
+                    continue
+                if isinstance(item, list):
+                    flat.extend([x for x in item if x is not None])
+                else:
+                    flat.append(item)
+            v = flat if flat else None
+        return v
+
     sample_records = []
     for doc in documents:
         text = _normalize_chat_text(_apply_chat_template(doc))
         a_i, i_i, v_i = _process_mm_info(doc, use_audio_in_video=False)
         aud = _unwrap_single(a_i)
         img = _unwrap_single(i_i)
-        vid = v_i
+        vid = _normalize_video_value(v_i)
         sig = (img is not None, vid is not None, aud is not None)
         sample_records.append({
             "text": text,
@@ -1461,14 +1639,20 @@ def NVOmni_process_fn(model_inputs: dict, processor, max_length=None):
         if has_images and any(isinstance(x, list) for x in images_g):
             images_g = [x if isinstance(x, list) else [x] for x in images_g]
 
-        # Text-only groups can use shorter caps to avoid OOM.
+        # Text-only groups can keep short caps.
+        # For multimodal groups (especially audio), too-small max_length truncates
+        # multimodal placeholder tokens while feature lengths remain full, causing
+        # Qwen2.5-Omni RoPE index shape mismatch in forward.
         if not has_images and not has_videos and not has_audios:
             if max_length is None:
                 text_max_length = 2048
             else:
                 text_max_length = min(int(max_length), 2048)
         else:
-            text_max_length = int(max_length) if max_length is not None else 204800
+            if max_length is None:
+                text_max_length = 2048
+            else:
+                text_max_length = max(int(max_length), 2048)
 
         text_kwargs = {
             "truncation": True,
@@ -1595,7 +1779,8 @@ process_vlm_inputs_fns = {
     QWEN2_5_VL: Qwen2_VL_process_fn,
     QWEN2_VL_TOKENSELECTION: Qwen2_VL_TokenSelection_process_fn,
     QWEN2_5_VL_TOKENSELECTION: Qwen2_VL_TokenSelection_process_fn,
-    QWEN2_5_OMNI: Omni_process_fn,
+    # Keep qwen2_5_omni aligned with nemotron-style multimodal preprocessing.
+    QWEN2_5_OMNI: NVOmni_process_fn,
     NVOMNIEMBED: NVOmni_process_fn,
     INTERNVIDEO2: InternVideo2_process_fn,
     GME: Gme_process_fn,

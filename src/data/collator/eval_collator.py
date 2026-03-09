@@ -291,8 +291,14 @@ class MultimodalEvalDataCollator:
 
         try:
             # Call the processor directly (grouping is handled inside processor now)
-            from src.model.processor import Omni_process_fn, NVOmni_process_fn, NVOMNIEMBED
-            process_fn = NVOmni_process_fn if self.model_args.model_backbone == NVOMNIEMBED else Omni_process_fn
+            from src.model.processor import Omni_process_fn, NVOmni_process_fn, NVOMNIEMBED, QWEN2_5_OMNI
+            # Keep eval behavior consistent with training:
+            # use apply_chat_template + process_mm_info for both qwen2_5_omni and nvomniembed.
+            process_fn = (
+                NVOmni_process_fn
+                if self.model_args.model_backbone in {NVOMNIEMBED, QWEN2_5_OMNI}
+                else Omni_process_fn
+            )
             outputs = process_fn(
                 model_inputs=inputs,
                 processor=self.processor,
