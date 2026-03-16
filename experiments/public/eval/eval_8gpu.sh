@@ -15,8 +15,8 @@ cd "$REPO_ROOT" || exit 1
 # ==============================================================================
 CUDA_VISIBLE_DEVICES="0,1,2,3"
 BATCH_SIZE=8
-MODALITIES=("image" "video" "tool" "visdoc" "text" "gui")
-# MODALITIES=("video")
+# MODALITIES=("image" "video" "tool" "visdoc" "text")
+MODALITIES=("image")
 DATA_BASEDIR=/data/mengrui/.cache/huggingface/datasets/MMEB-V3
 OUTPUT_BASEDIR=exps/vlm2vec
 # WAVE-only optional args (only effective when MODEL_BACKBONE=wave)
@@ -102,9 +102,9 @@ parse_model_spec() {
 declare -a MODEL_SPECS
 # MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/omni-embed-nemotron-3b;nvomniembed;$OUTPUT_BASEDIR/omni-embed-nemotron-3b" )
 # Ours example (only edit MODEL_SPECS when switching models):
-# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours;/data/mengrui/OLM2Vec/OLM2Vec/exps/output_model/Qwen2_5Omni_3B.audio.lora16.BS512.IB64.GCq8p8.NormTemp002.lr5e5.step5kwarm100/checkpoint-7000" )
-MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen3-VL-Embedding-8B;qwen3_vl;$OUTPUT_BASEDIR/Qwen3-VL-Embedding-8B" )
-MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen3-VL-Embedding-2B;qwen3_vl;$OUTPUT_BASEDIR/Qwen3-VL-Embedding-2B" )
+MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours;/data/mengrui/.cache/huggingface/Qwen2_5Omni_3B_BS512_step5k/checkpoint-5000" )
+# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen3-VL-Embedding-8B;qwen3_vl;$OUTPUT_BASEDIR/Qwen3-VL-Embedding-8B" )
+# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen3-VL-Embedding-2B;qwen3_vl;$OUTPUT_BASEDIR/Qwen3-VL-Embedding-2B" )
 # MODEL_SPECS+=( "VLM2Vec/VLM2Vec-V2.0;qwen2_vl;$OUTPUT_BASEDIR/VLM2Vec-V2.0-Qwen2VL-2B" )
 # MODEL_SPECS+=( "Alibaba-NLP/gme-Qwen2-VL-2B-Instruct;gme;$OUTPUT_BASEDIR/gme-Qwen2-VL-2B-Instruct" )
 # MODEL_SPECS+=( "Alibaba-NLP/gme-Qwen2-VL-7B-Instruct;gme;$OUTPUT_BASEDIR/gme-Qwen2-VL-7B-Instruct" )
@@ -140,6 +140,12 @@ for spec in "${MODEL_SPECS[@]}"; do
     exit 1
   fi
   EXTRA_MODEL_ARGS=""
+  EFFECTIVE_NORMALIZE="$SPEC_NORMALIZE"
+  case "$MODEL_BACKBONE" in
+    qwen2_5_omni|nvomniembed|wave)
+      EFFECTIVE_NORMALIZE="true"
+      ;;
+  esac
   if [[ "$MODEL_BACKBONE" == "wave" ]]; then
     WAVE_PROCESSOR_EFFECTIVE="${WAVE_PROCESSOR_PATH:-$MODEL_NAME}"
     EXTRA_MODEL_ARGS="$EXTRA_MODEL_ARGS --processor_name \"$WAVE_PROCESSOR_EFFECTIVE\""
@@ -196,8 +202,8 @@ for spec in "${MODEL_SPECS[@]}"; do
     mkdir -p "$OUTPUT_PATH"
 
     cmd="CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES EVAL_MODALITY=\"$MODALITY\" EVAL_DATASET_TIMING_LOG=\"$DATASET_TIMING_LOG\" torchrun --nproc_per_node=$NPROC_PER_NODE --master_port=2277 --max_restarts=0 eval.py \
-      --pooling \last \
-      --normalize \"$SPEC_NORMALIZE\" \
+      --pooling \"mean\" \
+      --normalize \"$EFFECTIVE_NORMALIZE\" \
       --per_device_eval_batch_size $BATCH_SIZE \
       --model_backbone \"$MODEL_BACKBONE\" \
       --model_name \"$MODEL_NAME\" \
@@ -205,6 +211,7 @@ for spec in "${MODEL_SPECS[@]}"; do
       $EXTRA_DATA_ARGS \
       --dataset_config \"$DATA_CONFIG_PATH\" \
       --encode_output_path \"$OUTPUT_PATH\" \
+      --lora true \
       --data_basedir \"$DATA_BASEDIR\""
     if [ -n "$SPEC_PROCESSOR_NAME" ]; then
       cmd="$cmd --processor_name \"$SPEC_PROCESSOR_NAME\""

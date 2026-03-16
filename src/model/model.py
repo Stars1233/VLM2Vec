@@ -194,8 +194,8 @@ class MMEBModel(nn.Module):
             attn_mask = input.get("attention_mask", None)
             return self._pooling(hidden_states, attn_mask)
 
-        # ===== QWEN2.5 OMNI / WAVE =====
-        elif backbone in {QWEN2_5_OMNI, WAVE}:
+        # ===== QWEN2.5 OMNI / NVOMNI / WAVE =====
+        elif backbone in {QWEN2_5_OMNI, NVOMNIEMBED, WAVE}:
             is_wave = backbone == WAVE
             # 1) 过滤掉调试字段（模型不认识）
             EXTRA_KEYS = {"texts", "images", "audios"}
