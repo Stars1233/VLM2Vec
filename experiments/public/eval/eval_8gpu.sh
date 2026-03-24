@@ -13,12 +13,12 @@ cd "$REPO_ROOT" || exit 1
 # ==============================================================================
 # Configuration
 # ==============================================================================
-CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
-BATCH_SIZE=16
+CUDA_VISIBLE_DEVICES="0,1,2,3,4,5"
+BATCH_SIZE=8
 # Per-process dataloader workers. Can override by env, e.g. DATALOADER_NUM_WORKERS=12 bash ...
-DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-8}"
+DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-1}"
 # MODALITIES=("image" "video" "tool" "visdoc" "text")
-MODALITIES=("gui")
+MODALITIES=("video")
 DATA_BASEDIR=/data/mengrui/.cache/huggingface/datasets/MMEB-V3
 OUTPUT_BASEDIR=exps/vlm2vec
 # WAVE-only optional args (only effective when MODEL_BACKBONE=wave)
@@ -106,10 +106,11 @@ declare -a MODEL_SPECS
 # MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/omni-embed-nemotron-3b;nvomniembed;$OUTPUT_BASEDIR/omni-embed-nemotron-3b" )
 # Ours example (only edit MODEL_SPECS when switching models):
 # MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours-256;/data/mengrui/.cache/huggingface/Qwen2_5Omni_3B_BS256_step10k/checkpoint-10000" )
-# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours-512;/data/mengrui/.cache/huggingface/Qwen2_5Omni_3B_BS512_step5k/checkpoint-5000" )
-MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen3-VL-Embedding-8B;qwen3_vl;$OUTPUT_BASEDIR/Qwen3-VL-Embedding-8B" )
-MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen3-VL-Embedding-2B;qwen3_vl;$OUTPUT_BASEDIR/Qwen3-VL-Embedding-2B" )
+ MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours-EXP_06;/data/mengrui/.cache/huggingface/EXP_06/step_5000;lora=true;pooling=mean;normalize=true" )
+# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen3-VL-Embedding-8B;qwen3_vl;$OUTPUT_BASEDIR/Qwen3-VL-Embedding-8B" )
+# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen3-VL-Embedding-2B;qwen3_vl;$OUTPUT_BASEDIR/Qwen3-VL-Embedding-2B" )
 # MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2-VL-2B-Instruct;qwen2_vl;$OUTPUT_BASEDIR/VLM2Vec-V2.0-Qwen2VL-2B;/data/mengrui/.cache/huggingface/VLM2Vec-V2.0;lora=true;pooling=last;normalize=true")
+# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2-VL-7B-Instruct;qwen2_vl;$OUTPUT_BASEDIR/VLM2Vec--Qwen2VL-7B;/data/mengrui/.cache/huggingface/VLM2Vec-Qwen2VL-7B;lora=true;pooling=last;normalize=true")
 # MODEL_SPECS+=( "Alibaba-NLP/gme-Qwen2-VL-2B-Instruct;gme;$OUTPUT_BASEDIR/gme-Qwen2-VL-2B-Instruct" )
 # MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/gme-Qwen2-VL-7B-Instruct;gme;$OUTPUT_BASEDIR/gme-Qwen2-VL-7B-Instruct" )
 # MODEL_SPECS+=( "code-kunkun/LamRA-Ret;lamra;$OUTPUT_BASEDIR/LamRA-Ret" )

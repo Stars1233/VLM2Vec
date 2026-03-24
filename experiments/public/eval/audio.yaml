@@ -41,7 +41,7 @@ Clotho:
     dataset_parser: clotho_text_audio
     dataset_name: Clotho
     dataset_split: test
-    audio_root: audio-tasks/clotho/clotho
+    audio_root: audio-tasks/clotho
     eval_type: global
 AVE:
     dataset_parser: ave_retrieval  # audio -> video

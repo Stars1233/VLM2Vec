@@ -124,8 +124,12 @@ class MMEBModel(nn.Module):
             if attention_mask is None:
                 reps = hidden_states[:, -1]
             else:
-                last_idx = attention_mask.sum(dim=1) - 1  # (B,)
-                last_idx = last_idx.clamp_min(0)
+                # Works for both left-padding and right-padding:
+                # pick the largest position whose mask==1 in each sequence.
+                seq_len = attention_mask.size(1)
+                pos = torch.arange(seq_len, device=hidden_states.device).unsqueeze(0).expand_as(attention_mask)
+                masked_pos = pos.masked_fill(attention_mask == 0, -1)
+                last_idx = masked_pos.max(dim=1).values.clamp_min(0)
                 reps = hidden_states[
                     torch.arange(hidden_states.size(0), device=hidden_states.device),
                     last_idx
