@@ -430,7 +430,7 @@ def main():
     # Step 2: All processes wait here. The non-master processes will pause
     # until the master process (rank 0) finishes downloading and exits this barrier.
     if torch.distributed.is_initialized():
-        torch.distributed.barrier()
+        torch.distributed.barrier(device_ids=[local_rank])
     # Step 3: Now that the model is cached, the non-master processes load it from the local cache.
     if rank != 0:
         print_rank(f"Loading the model from cache...")
@@ -461,7 +461,7 @@ def main():
         try:
             # 0. load dataset
             if dist.is_initialized():
-                dist.barrier()
+                dist.barrier(device_ids=[local_rank])
             print_master(f"--- Evaluating {dataset_name} ---")
 
             query_embed_path = os.path.join(data_args.encode_output_path, f"{dataset_name}_qry")
@@ -529,7 +529,7 @@ def main():
                             f.write(json.dumps(info) + '\n')
                     print_master(f"Saved query embeddings to {query_embed_path}")
                 if dist.is_initialized():
-                    dist.barrier()
+                    dist.barrier(device_ids=[local_rank])
                 query_seconds = time.time() - query_start_ts
 
             # --- 2. Compute Candidate Embeddings ---
@@ -553,7 +553,7 @@ def main():
                 cand_seconds = time.time() - cand_start_ts
 
             if dist.is_initialized():
-                dist.barrier()
+                dist.barrier(device_ids=[local_rank])
 
             # --- 3. Compute Scores (on master rank only) ---
             if local_rank == 0:
@@ -595,21 +595,29 @@ def main():
                     if rank_against_all_candidates:
                         cand_keys = list(cand_embed_dict.keys())
                         cand_embeds = np.stack([cand_embed_dict[key] for key in cand_keys])
-                        # Handle late-interaction scoring
+
+                        # Compute a score matrix with shape [N_q, N_c].
                         if qry_embeds.ndim == 3:  # Query: [N_q, L_q, H] | Candidate: [N_c, L_c, H]
                             qry_embed = torch.from_numpy(qry_embeds)
                             cand_embeds = [torch.from_numpy(np.array(t)) for t in cand_embeds]
                             scores = processor.score(qry_embed, cand_embeds, batch_size=64)  # use ColPali score function
-                            ranked_candids = torch.argsort(-scores, dim=1).cpu().numpy().tolist()
+                            score_matrix = scores.detach().cpu().numpy() if isinstance(scores, torch.Tensor) else np.array(scores)
                         else:  # Dense
-                            cosine_scores = np.dot(qry_embeds, cand_embeds.T)
-                            ranked_candids = np.argsort(-cosine_scores, axis=1)
+                            score_matrix = np.dot(qry_embeds, cand_embeds.T)
+
+                        ranked_candids = np.argsort(-score_matrix, axis=1)
                         for qid, (ranked_candid, gt_info) in tqdm(enumerate(zip(ranked_candids, gt_infos)), desc=f"Calculating scores for {dataset_name}"):
+                            ranked_idx = ranked_candid.tolist() if isinstance(ranked_candid, np.ndarray) else list(ranked_candid)
                             rel_docids = gt_info["label_name"] if isinstance(gt_info["label_name"], list) else [gt_info["label_name"]]
                             rel_scores = gt_info["rel_scores"] if "rel_scores" in gt_info else None
                             assert rel_scores is None or len(rel_docids) == len(rel_scores)
+
+                            pred_names = [cand_keys[i] for i in ranked_idx]
+                            pred_scores = [float(score_matrix[qid][i]) for i in ranked_idx]
                             pred_dicts.append({
-                                "prediction": [cand_keys[i] for i in ranked_candid],
+                                "query": gt_info.get("query", None),
+                                "prediction": pred_names,
+                                "prediction_scores": pred_scores,
                                 "label": rel_docids,
                                 "rel_scores": rel_scores,
                             })
@@ -620,10 +628,12 @@ def main():
                                 qry_embed = torch.from_numpy(np.array(qry_embed)).unsqueeze(0)
                                 cand_embeds = [torch.from_numpy(np.array(t)) for t in cand_embeds]
                                 scores = processor.score(qry_embed, cand_embeds, batch_size=1024)  # use ColPali score function
-                                ranked_candids = torch.argsort(-scores, dim=1).cpu().numpy().tolist()[0]
+                                score_vector = scores.squeeze(0).detach().cpu().numpy() if isinstance(scores, torch.Tensor) else np.array(scores).squeeze(0)
                             else:
-                                cosine_score = np.dot(qry_embed, cand_embeds.T)
-                                ranked_candids = np.argsort(-cosine_score)
+                                score_vector = np.dot(qry_embed, cand_embeds.T)
+
+                            ranked_candids = np.argsort(-score_vector)
+                            ranked_idx = ranked_candids.tolist() if isinstance(ranked_candids, np.ndarray) else list(ranked_candids)
                             rel_docids = gt_info["label_name"] if isinstance(gt_info["label_name"], list) else [gt_info["label_name"]]
                             rel_scores = gt_info["rel_scores"] if "rel_scores" in gt_info else None
 
@@ -631,12 +641,16 @@ def main():
 
                             # Debug: inspect first sample top10
                             if qid == 0 and dataset_name == "QVHighlight":
-                                top10_idx = ranked_candids[:10].tolist() if isinstance(ranked_candids, np.ndarray) else ranked_candids[:10]
+                                top10_idx = ranked_idx[:10]
                                 top10_names = [gt_info["cand_names"][i] for i in top10_idx]
                                 print_master(f"[DEBUG QVHighlight] label: {rel_docids}, top10_idx: {top10_idx}, top10_names: {top10_names}")
 
+                            pred_names = [gt_info["cand_names"][i] for i in ranked_idx]
+                            pred_scores = [float(score_vector[i]) for i in ranked_idx]
                             pred_dicts.append({
-                                "prediction": [gt_info["cand_names"][i] for i in ranked_candids],
+                                "query": gt_info.get("query", None),
+                                "prediction": pred_names,
+                                "prediction_scores": pred_scores,
                                 "label": rel_docids,
                                 "rel_scores": rel_scores,
                             })

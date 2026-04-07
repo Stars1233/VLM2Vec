@@ -54,3 +54,4 @@ from .tutsound_hard_dataset import load_tutsound_hard_audio_dataset
 
 # Text Retrieval
 from .complex_text_retrieve import load_complex_text_retrieve_dataset
+from .memory_retrieval_dateset import load_memory_retrieval_dataset

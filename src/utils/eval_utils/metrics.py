@@ -241,16 +241,15 @@ class RankingMetrics:
                 score_dict[f"map@{k_val}"] = float(np.mean(ap_scores)) if ap_scores else 0.0
 
         if "mrr" in self.metric_list:
-            for k_val in self.k_list:
-                rr_scores = []
-                for case in processed_test_cases_for_map_mrr:
-                    reciprocal_rank = 0.0
-                    if case["label"]: # Only if there are true labels
-                        for rank, p_item in enumerate(case["prediction"][:k_val]):
-                            if p_item in case["label"]:
-                                reciprocal_rank = 1.0 / (rank + 1)
-                                break
-                    rr_scores.append(reciprocal_rank)
-                score_dict[f"mrr@{k_val}"] = float(np.mean(rr_scores)) if rr_scores else 0.0
+            rr_scores = []
+            for case in processed_test_cases_for_map_mrr:
+                reciprocal_rank = 0.0
+                if case["label"]:  # Only if there are true labels
+                    for rank, p_item in enumerate(case["prediction"]):
+                        if p_item in case["label"]:
+                            reciprocal_rank = 1.0 / (rank + 1)
+                            break
+                rr_scores.append(reciprocal_rank)
+            score_dict["mrr"] = float(np.mean(rr_scores)) if rr_scores else 0.0
 
         return score_dict

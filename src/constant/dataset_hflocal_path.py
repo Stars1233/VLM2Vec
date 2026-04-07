@@ -127,6 +127,12 @@ EVAL_DATASET_HF_PATH = {
     "TUTSound": (os.path.join(BASE_RAW_DATA_DIR, "audio-tasks", "tutsound"), "TUTSound", "test"),
 
 
+    # Memory-RET
+    "KnowMeBench": (os.path.join(BASE_RAW_DATA_DIR, "memory-tasks", "Episodic", "KnowMeBench"), None, "test"),
+    "REALTALK": (os.path.join(BASE_RAW_DATA_DIR, "memory-tasks", "Dialogue", "REALTALK"), None, "test"),
+    "PeerQA": (os.path.join(BASE_RAW_DATA_DIR, "memory-tasks", "Semantic", "PeerQA"), None, "test"),
+    "DeepPlanning": (os.path.join(BASE_RAW_DATA_DIR, "memory-tasks", "Procedural", "DeepPlanning"), None, "test"),
+
     # GAE-GUIAct
     "GAE-GUIAct_q2t": (os.path.join(BASE_RAW_DATA_DIR, "gui-tasks", "GAE-GUIAct"), None, "q2t"),
     "GAE-GUIAct_q2s": (os.path.join(BASE_RAW_DATA_DIR, "gui-tasks", "GAE-GUIAct"), None, "q2s"),

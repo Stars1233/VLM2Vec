@@ -6,7 +6,12 @@ from collections import defaultdict
 import PIL
 from transformers.image_utils import ChannelDimension
 
-from src.model.baseline_backbone.colpali import ColPaliProcessor
+try:
+    from src.model.baseline_backbone.colpali import ColPaliProcessor
+    _COLPALI_IMPORT_ERROR = None
+except Exception as exc:
+    ColPaliProcessor = None
+    _COLPALI_IMPORT_ERROR = exc
 
 logger = logging.getLogger(__name__)
 
@@ -14,17 +19,62 @@ import torch
 import numpy as np
 from src.utils.basic_utils import print_master
 
-from src.model.baseline_backbone.llava_next import LlavaNextForConditionalGeneration
-from src.model.baseline_backbone.phi3_v.modeling_phi3_v import Phi3VForCausalLM
-from src.model.vlm_backbone.qwen2_vl import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
-from src.model.vlm_backbone.qwen2_vl_tokenselection import \
-    Qwen2VLForConditionalGeneration as Qwen2VLTokenSelectionForConditionalGeneration, \
-    Qwen2VLProcessor as Qwen2VLTokenSelectionProcessor
-from src.model.baseline_backbone.internvideo2.modeling_internvideo2 import InternVideo2_Stage2
-from src.model.vlm_backbone.qwen2_5_vl import Qwen2_5_VLForConditionalGeneration
-from src.model.vlm_backbone.qwen2_5_vl_tokenselection import \
-    Qwen2_5_VLForConditionalGeneration as Qwen2_5_VL_TokenSelectionForConditionalGeneration
-from src.model.vlm_backbone.omni_embed import OmniEmbedForConditionalGeneration
+try:
+    from src.model.baseline_backbone.llava_next import LlavaNextForConditionalGeneration
+    _LLAVA_IMPORT_ERROR = None
+except Exception as exc:
+    LlavaNextForConditionalGeneration = None
+    _LLAVA_IMPORT_ERROR = exc
+
+try:
+    from src.model.baseline_backbone.phi3_v.modeling_phi3_v import Phi3VForCausalLM
+    _PHI3_IMPORT_ERROR = None
+except Exception as exc:
+    Phi3VForCausalLM = None
+    _PHI3_IMPORT_ERROR = exc
+try:
+    from src.model.vlm_backbone.qwen2_vl import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
+    _QWEN2_VL_IMPORT_ERROR = None
+except Exception as exc:
+    Qwen2VLForConditionalGeneration = None
+    Qwen2VLProcessor = None
+    _QWEN2_VL_IMPORT_ERROR = exc
+
+try:
+    from src.model.vlm_backbone.qwen2_vl_tokenselection import         Qwen2VLForConditionalGeneration as Qwen2VLTokenSelectionForConditionalGeneration,         Qwen2VLProcessor as Qwen2VLTokenSelectionProcessor
+    _QWEN2_VL_TS_IMPORT_ERROR = None
+except Exception as exc:
+    Qwen2VLTokenSelectionForConditionalGeneration = None
+    Qwen2VLTokenSelectionProcessor = None
+    _QWEN2_VL_TS_IMPORT_ERROR = exc
+
+try:
+    from src.model.baseline_backbone.internvideo2.modeling_internvideo2 import InternVideo2_Stage2
+    _INTERNVIDEO_IMPORT_ERROR = None
+except Exception as exc:
+    InternVideo2_Stage2 = None
+    _INTERNVIDEO_IMPORT_ERROR = exc
+
+try:
+    from src.model.vlm_backbone.qwen2_5_vl import Qwen2_5_VLForConditionalGeneration
+    _QWEN25_VL_IMPORT_ERROR = None
+except Exception as exc:
+    Qwen2_5_VLForConditionalGeneration = None
+    _QWEN25_VL_IMPORT_ERROR = exc
+
+try:
+    from src.model.vlm_backbone.qwen2_5_vl_tokenselection import         Qwen2_5_VLForConditionalGeneration as Qwen2_5_VL_TokenSelectionForConditionalGeneration
+    _QWEN25_VL_TS_IMPORT_ERROR = None
+except Exception as exc:
+    Qwen2_5_VL_TokenSelectionForConditionalGeneration = None
+    _QWEN25_VL_TS_IMPORT_ERROR = exc
+
+try:
+    from src.model.vlm_backbone.omni_embed import OmniEmbedForConditionalGeneration
+    _OMNI_EMBED_IMPORT_ERROR = None
+except Exception as exc:
+    OmniEmbedForConditionalGeneration = None
+    _OMNI_EMBED_IMPORT_ERROR = exc
 from src.model.wave_official_utils import load_wave_official_processor_class
 
 
@@ -556,12 +606,17 @@ def load_processor(model_args, data_args=None):
         _install_qwen_omni_warning_filters()
         processor_path = model_args.processor_name if model_args.processor_name else model_name_or_path
         Qwen2_5OmniProcessor = load_wave_official_processor_class()
-        processor = Qwen2_5OmniProcessor.from_pretrained(processor_path, trust_remote_code=True)
+        processor = Qwen2_5OmniProcessor.from_pretrained(processor_path)
         
     elif model_args.model_backbone == INTERNVIDEO2:
         return None
     elif model_args.model_backbone == COLPALI:
         from transformers import AutoProcessor
+        if ColPaliProcessor is None:
+            raise ImportError(
+                "ColPaliProcessor is unavailable due to import error; "
+                "install compatible dependencies to use COLPALI backbone."
+            ) from _COLPALI_IMPORT_ERROR
         processor = ColPaliProcessor.from_pretrained(model_args.model_name)
     else:
         from transformers import AutoProcessor

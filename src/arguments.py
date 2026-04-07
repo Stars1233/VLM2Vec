@@ -1,7 +1,25 @@
 from dataclasses import dataclass, field
-from transformers import TrainingArguments
 from typing import List
 import torch
+
+try:
+    from transformers import TrainingArguments as HFTrainingArguments
+    _TRAINING_ARGS_IMPORT_ERROR = None
+except Exception as exc:
+    _TRAINING_ARGS_IMPORT_ERROR = exc
+
+    class HFTrainingArguments:  # type: ignore[override]
+        """Lightweight fallback to keep inference-time imports working."""
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __post_init__(self):
+            pass
+
+        @property
+        def device(self):
+            return torch.device("cpu")
 
 
 @dataclass
@@ -70,7 +88,7 @@ class DataArguments:
 
 
 @dataclass
-class TrainingArguments(TrainingArguments):
+class TrainingArguments(HFTrainingArguments):
     device: torch.device = field(default=None, metadata={"help": "device for training/inference"})
     image_encoder_freeze: bool = field(default=False, metadata={"help": "huggingface model name"})
     output_dir: str = field(default=None, metadata={"help": "directory for saving trained models"})
@@ -91,6 +109,11 @@ class TrainingArguments(TrainingArguments):
     def __post_init__(self):
         # Ensure base TrainingArguments initialization runs (sets distributed_state, etc.)
         super().__post_init__()
+        if _TRAINING_ARGS_IMPORT_ERROR is not None:
+            # In fallback mode we keep a minimal object for import-time compatibility.
+            self.distributed_state = None
+            self.device = torch.device("cpu")
+            return
         # Some transformers versions don't define distributed_state; keep it for later access.
         if not hasattr(self, "distributed_state"):
             self.distributed_state = None

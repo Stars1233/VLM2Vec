@@ -5,7 +5,14 @@ from torch import nn, Tensor
 import torch.nn.functional as F
 import numpy as np
 from transformers import PreTrainedModel, AutoModel, AutoModelForCausalLM, AutoConfig
-from peft import LoraConfig, get_peft_model, PeftModel
+try:
+    from peft import LoraConfig, get_peft_model, PeftModel
+    _PEFT_IMPORT_ERROR = None
+except Exception as exc:
+    LoraConfig = None
+    get_peft_model = None
+    PeftModel = None
+    _PEFT_IMPORT_ERROR = exc
 
 from src.arguments import ModelArguments, TrainingArguments
 from src.model.processor import (
@@ -14,16 +21,57 @@ from src.model.processor import (
     INTERNVIDEO2, GME, VLM_IMAGE_TOKENS, LamRA, LamRA_QWEN2_5, COLPALI, QWEN2_5_OMNI, NVOMNIEMBED, WAVE, QWEN3_VL
 )
 from src.model.wave_official_utils import load_wave_official_model_classes
-from src.model.baseline_backbone.colpali import ColPali
-from src.model.baseline_backbone.gme.gme_inference import GmeQwen2VL
-from src.model.baseline_backbone.lamra.lamra_inference import LamRAQwen2VL
-from src.model.baseline_backbone.lamra.lamra_qwen25_inference import LamRAQwen25VL
-from src.model.baseline_backbone.phi3_v.modeling_phi3_v import Phi3VForCausalLM
-from src.model.baseline_backbone.llava_next import LlavaNextForConditionalGeneration
+try:
+    from src.model.baseline_backbone.colpali import ColPali
+    _COLPALI_IMPORT_ERROR = None
+except Exception as exc:
+    ColPali = None
+    _COLPALI_IMPORT_ERROR = exc
+try:
+    from src.model.baseline_backbone.gme.gme_inference import GmeQwen2VL
+    _GME_IMPORT_ERROR = None
+except Exception as exc:
+    GmeQwen2VL = None
+    _GME_IMPORT_ERROR = exc
+
+try:
+    from src.model.baseline_backbone.lamra.lamra_inference import LamRAQwen2VL
+    _LAMRA_IMPORT_ERROR = None
+except Exception as exc:
+    LamRAQwen2VL = None
+    _LAMRA_IMPORT_ERROR = exc
+
+try:
+    from src.model.baseline_backbone.lamra.lamra_qwen25_inference import LamRAQwen25VL
+    _LAMRA25_IMPORT_ERROR = None
+except Exception as exc:
+    LamRAQwen25VL = None
+    _LAMRA25_IMPORT_ERROR = exc
+try:
+    from src.model.baseline_backbone.phi3_v.modeling_phi3_v import Phi3VForCausalLM
+    _PHI3_IMPORT_ERROR = None
+except Exception as exc:
+    Phi3VForCausalLM = None
+    _PHI3_IMPORT_ERROR = exc
+
+try:
+    from src.model.baseline_backbone.llava_next import LlavaNextForConditionalGeneration
+    _LLAVA_IMPORT_ERROR = None
+except Exception as exc:
+    LlavaNextForConditionalGeneration = None
+    _LLAVA_IMPORT_ERROR = exc
 
 from transformers import modeling_utils
 if not hasattr(modeling_utils, "ALL_PARALLEL_STYLES") or modeling_utils.ALL_PARALLEL_STYLES is None:
     modeling_utils.ALL_PARALLEL_STYLES = ["tp", "none", "colwise", "rowwise"]
+
+
+def _require_peft():
+    if LoraConfig is None or get_peft_model is None or PeftModel is None:
+        raise ImportError(
+            "peft is required for LoRA paths but failed to import. "
+            "Please install compatible peft/transformers versions."
+        ) from _PEFT_IMPORT_ERROR
 
 
 class MMEBModel(nn.Module):
@@ -550,10 +598,10 @@ class MMEBModel(nn.Module):
                 config=config,
                 attn_implementation="flash_attention_2",
                 torch_dtype=torch.bfloat16,
-                trust_remote_code=True,
-            )
+                            )
 
         if model_args.lora:
+            _require_peft()
             print_master(f"Loading lora adapter from {base_model}")
             lora_config = LoraConfig(
                 r=model_args.lora_r,
@@ -598,7 +646,7 @@ class MMEBModel(nn.Module):
 
         if model_args.model_backbone == WAVE:
             Qwen2_5OmniThinkerConfig, Qwen2_5OmniThinkerForConditionalGeneration = load_wave_official_model_classes()
-            config = Qwen2_5OmniThinkerConfig.from_pretrained(config_source, trust_remote_code=True)
+            config = Qwen2_5OmniThinkerConfig.from_pretrained(config_source)
             config.use_cache = False
             config.padding_side = "left"
             try:
@@ -629,8 +677,7 @@ class MMEBModel(nn.Module):
                 torch_dtype=torch.bfloat16,
                 low_cpu_mem_usage=True,
                 config=config,
-                trust_remote_code=True,
-            )
+                            )
         elif model_args.model_backbone in {
             LLAVA_NEXT, QWEN2_VL, QWEN2_5_VL, QWEN2_VL_TOKENSELECTION, QWEN2_5_VL_TOKENSELECTION, QWEN2_5_OMNI, E5_V
         }:
@@ -647,8 +694,7 @@ class MMEBModel(nn.Module):
                 torch_dtype=torch.bfloat16,
                 low_cpu_mem_usage=True,
                 config=config,
-                trust_remote_code=True,
-            )
+                            )
         elif model_args.model_backbone == QWEN3_VL:
             config = AutoConfig.from_pretrained(model_args.model_name, trust_remote_code=True)
             try:
@@ -669,8 +715,7 @@ class MMEBModel(nn.Module):
                 torch_dtype=torch.bfloat16,
                 low_cpu_mem_usage=True,
                 config=config,
-                trust_remote_code=True,
-            )
+                            )
         elif model_args.model_backbone == NVOMNIEMBED:
             config = AutoConfig.from_pretrained(model_args.model_name, trust_remote_code=True)
             try:
@@ -684,8 +729,7 @@ class MMEBModel(nn.Module):
                 torch_dtype=torch.bfloat16,
                 low_cpu_mem_usage=True,
                 config=config,
-                trust_remote_code=True,
-            )
+                            )
         elif model_args.model_backbone == PHI3V:
             config = AutoConfig.from_pretrained(model_args.model_name, trust_remote_code=True)
             config.use_cache = False
@@ -717,6 +761,11 @@ class MMEBModel(nn.Module):
                 config = AutoConfig.from_pretrained(config_source, trust_remote_code=True)
             setattr(base_model, "config", config)
         elif model_args.model_backbone == COLPALI:
+            if ColPali is None:
+                raise ImportError(
+                    "ColPali is unavailable due to import error; install compatible dependencies "
+                    "to use COLPALI backbone."
+                ) from _COLPALI_IMPORT_ERROR
             base_model = ColPali.from_pretrained(model_args.model_name)
             if config is None:
                 config = AutoConfig.from_pretrained(config_source, trust_remote_code=True)
@@ -729,6 +778,7 @@ class MMEBModel(nn.Module):
             )
 
         if model_args.lora:
+            _require_peft()
             print_master(f"Loading LoRA from {model_name_or_path}")
             lora_config = LoraConfig.from_pretrained(model_name_or_path)
             # Qwen2.5-Omni wrapper note:

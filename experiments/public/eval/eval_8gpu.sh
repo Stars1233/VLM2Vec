@@ -13,12 +13,12 @@ cd "$REPO_ROOT" || exit 1
 # ==============================================================================
 # Configuration
 # ==============================================================================
-CUDA_VISIBLE_DEVICES="0,1,2,3,4,5"
+CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
 BATCH_SIZE=8
 # Per-process dataloader workers. Can override by env, e.g. DATALOADER_NUM_WORKERS=12 bash ...
 DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-1}"
 # MODALITIES=("image" "video" "tool" "visdoc" "text")
-MODALITIES=("video")
+MODALITIES=("image" "video" "visdoc")
 DATA_BASEDIR=/data/mengrui/.cache/huggingface/datasets/MMEB-V3
 OUTPUT_BASEDIR=exps/vlm2vec
 # WAVE-only optional args (only effective when MODEL_BACKBONE=wave)
@@ -105,8 +105,11 @@ parse_model_spec() {
 declare -a MODEL_SPECS
 # MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/omni-embed-nemotron-3b;nvomniembed;$OUTPUT_BASEDIR/omni-embed-nemotron-3b" )
 # Ours example (only edit MODEL_SPECS when switching models):
-# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours-256;/data/mengrui/.cache/huggingface/Qwen2_5Omni_3B_BS256_step10k/checkpoint-10000" )
- MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours-EXP_06;/data/mengrui/.cache/huggingface/EXP_06/step_5000;lora=true;pooling=mean;normalize=true" )
+MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours-EXP_02_01;/data/mengrui/.cache/huggingface/EXP_02_01;lora=true;pooling=mean;normalize=true" )
+MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours-EXP_02_02;/data/mengrui/.cache/huggingface/EXP_02_02;lora=true;pooling=mean;normalize=true" )
+MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours-EXP_02_04;/data/mengrui/.cache/huggingface/EXP_02_04;lora=true;pooling=mean;normalize=true" )
+# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours-EXP_02_04;/data/mengrui/.cache/huggingface/EXP_02_04;lora=true;pooling=mean;normalize=true" )
+# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours-EXP_02_02;/data/mengrui/.cache/huggingface/EXP_02_02/checkpoint-5000;lora=true;pooling=mean;normalize=true" )
 # MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen3-VL-Embedding-8B;qwen3_vl;$OUTPUT_BASEDIR/Qwen3-VL-Embedding-8B" )
 # MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen3-VL-Embedding-2B;qwen3_vl;$OUTPUT_BASEDIR/Qwen3-VL-Embedding-2B" )
 # MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2-VL-2B-Instruct;qwen2_vl;$OUTPUT_BASEDIR/VLM2Vec-V2.0-Qwen2VL-2B;/data/mengrui/.cache/huggingface/VLM2Vec-V2.0;lora=true;pooling=last;normalize=true")
@@ -228,7 +231,7 @@ for spec in "${MODEL_SPECS[@]}"; do
     # Ensure the output directory exists
     mkdir -p "$OUTPUT_PATH"
 
-    cmd="CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES EVAL_MODALITY=\"$MODALITY\" EVAL_DATASET_TIMING_LOG=\"$DATASET_TIMING_LOG\" torchrun --nproc_per_node=$NPROC_PER_NODE --master_port=2277 --max_restarts=0 eval.py \
+    cmd="CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES EVAL_MODALITY=\"$MODALITY\" EVAL_DATASET_TIMING_LOG=\"$DATASET_TIMING_LOG\" torchrun --nproc_per_node=$NPROC_PER_NODE --master_port=29677 --max_restarts=0 eval.py \
       --pooling \"$EFFECTIVE_POOLING\" \
       --normalize \"$EFFECTIVE_NORMALIZE\" \
       --per_device_eval_batch_size $BATCH_SIZE \
