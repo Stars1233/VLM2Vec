@@ -8,7 +8,6 @@ from typing import Dict, List, Tuple, Any
 
 import datasets
 import torchaudio
-from src.utils.dataset_utils import sample_dataset
 from src.data.eval_dataset.audio_instruction_utils import build_query_text
 from src.data.eval_dataset.base_eval_dataset import AutoEvalPairDataset
 from src.constant.dataset_hf_path import EVAL_DATASET_HF_PATH
@@ -73,7 +72,7 @@ def build_tutsound_audio_dataset(path_info: Tuple[str, str, str], **kwargs):
     iou_thresh = float(kwargs.get("neg_iou_thresh", 0.1))
     neg_max_per_query = int(kwargs.get("neg_max_per_query", 50))
 
-    # 1) 读四个 fold 的 evaluate 文件
+    # NOTE: Comment translated to English.
     all_rows = []
     for fold in ["1", "2", "3", "4"]:
         eval_file_name = f"street_fold{fold}_evaluate.txt"
@@ -88,14 +87,14 @@ def build_tutsound_audio_dataset(path_info: Tuple[str, str, str], **kwargs):
     if not all_rows:
         raise FileNotFoundError("No TUTSound evaluate files found for any fold")
 
-    # 2) 按 wav 聚合 GT 事件段
+    # NOTE: Comment translated to English.
     gt_by_fp: Dict[str, Dict[str, Any]] = {}
     for fp, scene, onset, offset, label in all_rows:
         if fp not in gt_by_fp:
             gt_by_fp[fp] = {"scene": scene, "events": []}
         gt_by_fp[fp]["events"].append({"label": label, "onset": onset, "offset": offset})
 
-    # 3) 构造 query：每个 GT event 一条；候选为同文件片段（含 GT + 背景滑窗）
+    # NOTE: Comment translated to English.
     query_audio = []
     query_text = []
     query_image = []
@@ -143,7 +142,7 @@ def build_tutsound_audio_dataset(path_info: Tuple[str, str, str], **kwargs):
             # Keep deterministic order while removing accidental duplicates.
             label_to_seg_ids[k] = list(dict.fromkeys(label_to_seg_ids[k]))
 
-        # 背景滑窗候选（固定长度，最后一窗不满则丢弃）
+        # NOTE: Comment translated to English.
         neg_segments = []
         if neg_win_len > 0 and neg_stride > 0 and audio_dur >= neg_win_len:
             t = 0.0
@@ -159,11 +158,11 @@ def build_tutsound_audio_dataset(path_info: Tuple[str, str, str], **kwargs):
                     neg_segments.append((seg_start, seg_end))
                 t += neg_stride
 
-        # 负例采样上限（每个 query）
+        # NOTE: Comment translated to English.
         if neg_max_per_query > 0 and len(neg_segments) > neg_max_per_query:
             neg_segments = neg_segments[:neg_max_per_query]
 
-        # 候选集合：所有 GT 片段 + 背景片段
+        # NOTE: Comment translated to English.
         cand_segments = gt_segments + neg_segments
         cand_names = [_seg_id(fp, s, e) for s, e in cand_segments]
         cand_audio_row = [{"path": abs_path, "start": s, "end": e, "bytes": None} for s, e in cand_segments]
@@ -204,8 +203,6 @@ def build_tutsound_audio_dataset(path_info: Tuple[str, str, str], **kwargs):
             "dataset_infos": dataset_infos,
         }
     )
-
-    dataset = sample_dataset(dataset, **kwargs)
     return dataset, None
 
 

@@ -13,7 +13,6 @@ from src.constant.dataset_hf_path import EVAL_DATASET_HF_PATH
 from src.constant.dataset_hflocal_path import EVAL_DATASET_HF_PATH as EVAL_DATASET_LOCAL_PATH
 from src.data.eval_dataset.audio_instruction_utils import build_query_text
 from src.data.eval_dataset.base_eval_dataset import AutoEvalPairDataset
-from src.utils.dataset_utils import sample_dataset
 
 
 def _read_evaluate_file(eval_path: str) -> List[Tuple[str, str, float, float, str]]:
@@ -182,8 +181,6 @@ def build_tutsound_hard_audio_dataset(path_info: Tuple[str, str, str], **kwargs)
             "dataset_infos": dataset_infos,
         }
     )
-
-    dataset = sample_dataset(dataset, **kwargs)
     return dataset, None
 
 

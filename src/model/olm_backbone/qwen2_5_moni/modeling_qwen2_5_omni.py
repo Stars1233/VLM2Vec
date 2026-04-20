@@ -23,10 +23,10 @@ class Qwen2_5OmniEmbeddingModel(PreTrainedModel):
         self.base = Qwen2_5OmniThinkerForConditionalGeneration.from_pretrained(
             config.base_model_name_or_path,
             torch_dtype="auto",
-            device_map=None,   # 让外部 from_pretrained(device_map=...) 控制
+            device_map=None,   # Let external from_pretrained(device_map=...) control placement.
         )
 
-        # 可选：投影头（如果你训练时加了）
+        # Optional projection head (if enabled during training).
         self.proj = None
         if config.projection_dim is not None:
             hidden = getattr(self.base.config, "hidden_size", None)
@@ -35,7 +35,7 @@ class Qwen2_5OmniEmbeddingModel(PreTrainedModel):
             self.proj = nn.Linear(hidden, config.projection_dim, bias=False)
 
     def forward(self, **inputs):
-        # 强制稳定输出
+        # Enforce stable outputs.
         inputs["output_hidden_states"] = True
         inputs["return_dict"] = True
         inputs["use_cache"] = False
@@ -49,7 +49,7 @@ class Qwen2_5OmniEmbeddingModel(PreTrainedModel):
         if self.config.pooling == "mean":
             emb = _mean_pool(hs, mask)
         elif self.config.pooling == "eos":
-            # eos pooling 风险更大；建议只做 ablation
+            # EOS pooling is riskier; keep it mainly for ablation.
             lengths = mask.long().sum(dim=1) - 1
             emb = hs[torch.arange(hs.size(0), device=hs.device), lengths]
         else:

@@ -1,13 +1,14 @@
-# ToolDe 评估配置
-# 文本到文本的工具文档检索任务
+# ToolDe evaluation configuration
+# Text-to-text tool-document retrieval task
 # 
-# 数据结构说明：
-# - Query分为三大类：web, code, customized，每个大类下有多个子任务
-#   例如：web/apigen, code/xxx, customized/xxx
-# - Candidate也分为三大类：web, code, customized
-# - 评估时按类别检索：web的query只在web的candidate中检索
+# Data structure notes:
+# - Queries are split into three categories: web, code, customized; each has multiple subtasks
+#   e.g., web/apigen, code/xxx, customized/xxx
+# - Candidates are also split into the same three categories: web, code, customized
+# - Retrieval is category-constrained during evaluation:
+#   web queries are retrieved only against web candidates
 
-# Web类别任务
+# Web category tasks
 
 toolde/web/apibank:
   dataset_parser: toolde
@@ -328,4 +329,3 @@ toolde/customized/toolbench-sam:
   candidate_file: 
     tool-tasks/ToolDe-Candidates/customized/tools-00000-of-00001.parquet
   eval_type: global
-

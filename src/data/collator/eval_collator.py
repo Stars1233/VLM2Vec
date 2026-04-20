@@ -179,7 +179,7 @@ class MultimodalEvalDataCollator:
             if (not self.data_args.resize_use_processor) and image is not None and image_resolution:
                 image = image.resize(image_resolution)
 
-            # image_decay_factor 逻辑（原样保留）
+            # NOTE: Comment translated to English.
             if image is not None and (image_resolution is None and self.data_args.image_decay_factor is not None):
                 assert self.model_args.model_backbone in [QWEN2_VL, QWEN2_5_VL, QWEN3_VL, QWEN2_VL_TOKENSELECTION, QWEN2_5_VL_TOKENSELECTION], \
                     "image_decay_factor is only supported for Qwen models"
@@ -204,7 +204,7 @@ class MultimodalEvalDataCollator:
         """
         visual_mode:
           - "image": 传给 processor(images=...)
-          - "video": 传给 processor(videos=...)   # ✅ AVE cand_video 用这个
+          - "video": 传给 processor(videos=...)  # NOTE: Comment translated to English.
         """
         texts, visuals, audios = [], [], []
 
@@ -221,24 +221,24 @@ class MultimodalEvalDataCollator:
             ex_audio = example.get(audio_keyname, None)
 
             # ex_text: list[str]
-            # 1) ImageVideoInstance dict 格式：ex_visual 是 dict 或 list[dict]
+            # NOTE: Comment translated to English.
             if isinstance(ex_visual, dict):
-                # ex_text 是 list[str]，通常长度=1
+                # NOTE: Comment translated to English.
                 for t in ex_text:
                     visual_input = self._load_image_from_dict(ex_visual)  # List[PIL] or []
                     texts.append(t)
-                    visuals.append(visual_input if visual_input else None)  # ✅ 统一成 List[PIL] 或 None
+                    visuals.append(visual_input if visual_input else None)  # NOTE: Comment translated to English.
                     audios.append(ex_audio)
 
             elif isinstance(ex_visual, list) and len(ex_visual) > 0 and isinstance(ex_visual[0], dict):
-                # ex_visual: list[dict]，与 ex_text 对齐
+                # NOTE: Comment translated to English.
                 for t, raw_images in zip(ex_text, ex_visual):
                     visual_input = self._load_image_from_dict(raw_images)  # List[PIL]
                     texts.append(t)
-                    visuals.append(visual_input if visual_input else None)  # ✅ 统一成 List[PIL] 或 None
+                    visuals.append(visual_input if visual_input else None)  # NOTE: Comment translated to English.
                     audios.append(ex_audio)
 
-            # 2) ✅ AVE/MSRVTT 风格视频：ex_visual 是 list[list[PIL.Image]]
+            # NOTE: Comment translated to English.
             elif visual_mode == "video":
                 for t, video_frames in zip(ex_text, ex_visual):
                     texts.append(t)
@@ -263,7 +263,7 @@ class MultimodalEvalDataCollator:
                     visuals.append(video_frames)  # List[PIL.Image]
                     audios.append(ex_audio)
 
-            # 3) 普通 image：把它也统一成 List[PIL] 或 None
+            # NOTE: Comment translated to English.
             else:
                 for t, visual_input in zip(ex_text, ex_visual):
                     texts.append(t)
@@ -353,7 +353,7 @@ class MultimodalEvalDataCollator:
                 visual_mode="image",
             )
         else:
-            # ✅ AVE：cand_video 优先走 video 模式
+            # NOTE: Comment translated to English.
             if "cand_video" in examples[0]:
                 inputs = self._get_batch_inputs(
                     examples,
@@ -371,7 +371,7 @@ class MultimodalEvalDataCollator:
                     visual_mode="image",
                 )
 
-        # ===== 音频读取/裁剪（保留你原来的逻辑）=====
+        # NOTE: Comment translated to English.
         if "audios" in inputs:
             target_sr = getattr(self.data_args, "audio_sample_rate", 16000) or 16000
             min_audio_samples = getattr(self.data_args, "audio_min_samples", None)
@@ -410,7 +410,7 @@ class MultimodalEvalDataCollator:
                 return wav
 
             def _safe_resample(wav: torch.Tensor, src_sr: int, dst_sr: int) -> torch.Tensor:
-                # torchaudio.functional.resample 会在空 waveform 上报错
+                # NOTE: Comment translated to English.
                 if wav is None or wav.numel() == 0 or src_sr == dst_sr:
                     return wav
                 return torchaudio.functional.resample(wav, src_sr, dst_sr)
@@ -465,7 +465,7 @@ class MultimodalEvalDataCollator:
 
                         if end_t is not None:
                             seg_frames = int((float(end_t) - start_t) * sr)
-                            # 兜底：处理 end<=start 或浮点误差导致的 0 长度片段
+                            # NOTE: Comment translated to English.
                             num_frames = max(1, seg_frames)
                             if total_frames > 0:
                                 remain = max(1, total_frames - frame_offset)

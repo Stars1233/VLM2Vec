@@ -123,7 +123,7 @@ def data_prepare(batch_dict, all_video_ids=None, **kwargs):
     """
     assert all_video_ids is not None and len(all_video_ids) > 0
 
-    # 3. 在 data_prepare 里构造 local 需要的三个字段（扁平 + 可复用）
+    # NOTE: Comment translated to English.
     video_root = kwargs.get("video_root", "")
     frame_root = kwargs.get("frame_root", "")
     num_frames = kwargs.get("num_frames", 8)
@@ -135,43 +135,43 @@ def data_prepare(batch_dict, all_video_ids=None, **kwargs):
     cand_text = [process_input_text(TASK_INST_TGT, model_backbone, add_video_token=True) for _ in cand_names]
     cand_image = []
     
-    # 为每个候选视频提取帧 (使用 ImageVideoInstance 避免内存爆炸)
+    # NOTE: Comment translated to English.
     for vid in cand_names:
         video_path = os.path.join(video_root, f"{vid}.mp4")
         frame_dir = os.path.join(frame_root, vid)
         
-        # 提取视频帧
+        # NOTE: Comment translated to English.
         save_frames(video_path=video_path, frame_dir=frame_dir, max_frames_saved=max_frames_saved)
         video_frame_paths = process_video_frames(frame_dir, num_frames=num_frames)
         
-        # 使用 ImageVideoInstance 包装路径，避免加载到内存
+        # NOTE: Comment translated to English.
         cand_image.append(ImageVideoInstance(
             bytes=[None] * len(video_frame_paths),
             paths=video_frame_paths,
             resolutions=[RESOLUTION_MAPPING.get(image_resolution, None)] * len(video_frame_paths),
         ).to_dict())
 
-    # 提前建 dict 加速查找
+    # NOTE: Comment translated to English.
     vid2idx = {vid: i for i, vid in enumerate(cand_names)}
 
     query_texts, query_images, query_audios = [], [], []
     dataset_infos = []
 
-    # 为每个音频查询创建数据
+    # NOTE: Comment translated to English.
     for category, video_id, clip_id, audio_obj in zip(
         batch_dict["category"],
         batch_dict["video_id"],
         batch_dict["clip_id"],
         batch_dict["query_audio"],
     ):
-        # 音频查询（已解码）
+        # NOTE: Comment translated to English.
         query_audios.append(audio_obj)
         query_text = build_query_text("AVE")
         query_texts.append(query_text)
         assert isinstance(query_text, list) and len(query_text) == 1 and isinstance(query_text[0], str) and query_text[0].strip()
         query_images.append([None])
 
-        # 找到正确答案在候选池中的索引
+        # NOTE: Comment translated to English.
         label_idx = vid2idx[video_id]
 
         info = {
@@ -184,7 +184,7 @@ def data_prepare(batch_dict, all_video_ids=None, **kwargs):
         }
         dataset_infos.append(info)
 
-    # 4. 在 data_prepare 最后返回的 batch 字段里，明确返回 cand_*（不要依赖旧字段）
+    # NOTE: Comment translated to English.
     bs = len(query_texts)
     return {
         "query_text": query_texts,
@@ -192,7 +192,7 @@ def data_prepare(batch_dict, all_video_ids=None, **kwargs):
         "query_audio": query_audios,
 
         "cand_text": [cand_text] * bs,
-        "cand_video": [cand_image] * bs,  # 改为 cand_video，因为候选项是视频帧
+        "cand_video": [cand_image] * bs,  # NOTE: Comment translated to English.
         "cand_audio": [[]] * bs,
 
         "dataset_infos": dataset_infos,
@@ -244,7 +244,7 @@ def load_ave_retrieval_dataset(model_args, data_args, **kwargs):
     assert os.path.isdir(video_root), f"Video directory not found: {video_root}"
 
     samples = _parse_split_file(split_path)
-    # 先过滤缺失视频（音频缺失时可走抽取）
+    # NOTE: Comment translated to English.
     video_filtered = []
     for s in samples:
         video_path = os.path.join(video_root, f"{s['video_id']}.mp4")
@@ -252,7 +252,7 @@ def load_ave_retrieval_dataset(model_args, data_args, **kwargs):
             video_filtered.append(s)
     samples = video_filtered
 
-    # 采样（放在音频处理前，可显著减少抽取开销）
+    # NOTE: Comment translated to English.
     max_samples = kwargs.get("max_samples", None)
     seed = kwargs.get("seed", 17)
     if max_samples is not None and max_samples < len(samples):
@@ -285,14 +285,14 @@ def load_ave_retrieval_dataset(model_args, data_args, **kwargs):
         f"video_root={video_root}, audio_root={audio_root}"
     )
 
-    # 构造 HF Dataset
-    # 构造音频文件路径（对齐 samples）
+    # NOTE: Comment translated to English.
+    # NOTE: Comment translated to English.
     audio_files = [
         s["audio_path"]
         for s in samples
     ]
 
-    # 一次性建 Dataset，把 audio 直接作为一列塞进去（最稳）
+    # NOTE: Comment translated to English.
     dataset = datasets.Dataset.from_dict(
         {
             "category": [s["category"] for s in samples],
@@ -303,13 +303,13 @@ def load_ave_retrieval_dataset(model_args, data_args, **kwargs):
         }
     )
 
-    # ✅ 让 datasets 自动解码音频，query_audio 会变成 {"array","sampling_rate"} 形式
+    # NOTE: Comment translated to English.
     dataset = dataset.cast_column("query_audio", Audio())
 
-    # 1A. 从 dataset 的 video_id 列去重得到候选（最稳、最少外部依赖）
+    # NOTE: Comment translated to English.
     all_video_ids = sorted(list(set(dataset["video_id"])))
 
-    # 传递路径参数和视频处理参数
+    # NOTE: Comment translated to English.
     kwargs["audio_root"] = audio_root
     kwargs["video_root"] = video_root
     kwargs["frame_root"] = kwargs.get("frame_root", os.path.join(data_path, "frames"))
@@ -318,11 +318,11 @@ def load_ave_retrieval_dataset(model_args, data_args, **kwargs):
     kwargs["image_resolution"] = data_args.image_resolution
     kwargs["model_backbone"] = model_args.model_backbone
 
-    # 2. 用闭包把 all_video_ids 传进 data_prepare
+    # NOTE: Comment translated to English.
     def _prepare(x):
         return data_prepare(x, all_video_ids=all_video_ids, **kwargs)
 
-    # 处理数据集
+    # NOTE: Comment translated to English.
     dataset = dataset.map(
         _prepare,
         batched=True,

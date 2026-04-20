@@ -2,7 +2,7 @@ from transformers import AutoProcessor
 
 class Qwen2_5OmniEmbeddingProcessor:
     """
-    轻量 wrapper：内部直接使用 AutoProcessor。
+    Lightweight wrapper that delegates to AutoProcessor.
     """
     def __init__(self, base_processor):
         self.base = base_processor

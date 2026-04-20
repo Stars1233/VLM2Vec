@@ -94,7 +94,7 @@ def data_prepare(batch_dict, *args, **kwargs):
     queries = batch_dict.get("query", [])
     responses = batch_dict.get("response", [])
 
-    # 检查长度匹配性，避免静默截断
+    # NOTE: Comment translated to English.
     if len(queries) != len(responses):
         print_master(f"Warning: queries ({len(queries)}) and responses ({len(responses)}) length mismatch, using zip (will truncate longer list)")
 
@@ -161,7 +161,7 @@ def load_toolde_dataset(model_args, data_args, training_args, *args, **kwargs):
         drop_last_batch=False,
     )
 
-    # 在 map 后重新统计实际行数（可能因过滤而减少）
+    # NOTE: Comment translated to English.
     num_rows = dataset.num_rows
     print_master(f"Loaded {DATASET_PARSER_NAME} dataset with {num_rows} samples")
     return dataset

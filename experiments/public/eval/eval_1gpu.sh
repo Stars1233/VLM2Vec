@@ -13,7 +13,7 @@ echo ""
 # ==============================================================================
 CUDA_VISIBLE_DEVICES="5"
 BATCH_SIZE=8
-# NPROC=2 多卡
+# NPROC=2 for multi-GPU.
 # NPROC=2 
 # BATCH_SIZE=8
 # MODALITIES=("image" "video" "tool" "visdoc" "audio" "text")
@@ -90,7 +90,7 @@ parse_model_spec() {
 # ==> Define models and their base output paths here
 # Format: "MODEL_NAME;MODEL_BACKBONE;BASE_OUTPUT_PATH[;CHECKPOINT_PATH]"
 declare -a MODEL_SPECS
-# 选项1: 使用本地Qwen2-VL-2B + VLM2Vec-V2.0适配器（推荐，避免网络下载）
+# Option 1: Use local Qwen2-VL-2B + VLM2Vec-V2.0 adapter (recommended to avoid network downloads).
 # MODEL_SPECS+=( "/code/.cache/huggingface/Qwen2-VL-2B;qwen2_vl;$OUTPUT_BASEDIR/VLM2Vec-V2.0-Qwen2VL-2B;/code/.cache/huggingface/VLM2Vec-V2.0" )
 # MODEL_SPECS+=( "/code/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/VLM2Vec-V3.0-Qwen2_5omni-3B;/code/OLM2VEC_and_MMEB-V3/VLM2Vec1/VLM2Vec/exps/output_model/Qwen2_5Omni_3B.audio.lora16.BS512.IB64.GCq8p8.NormTemp002.lr5e5.step5kwarm100/checkpoint-2850" )
 
@@ -165,7 +165,6 @@ for spec in "${MODEL_SPECS[@]}"; do
     # Ensure the output directory exists
     mkdir -p "$OUTPUT_PATH"
 # --pooling eos
-#   cmd="CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES torchrun --nproc_per_node $NPROC eval.py \ duoka
     cmd="CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES python eval.py \
       --pooling \"$SPEC_POOLING\" \
       --normalize \"$SPEC_NORMALIZE\" \

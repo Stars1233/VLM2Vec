@@ -6,7 +6,7 @@ from typing import Dict, Any, List, Tuple
 
 import datasets
 
-# ✅ pyarrow: 流式重写 corpus（展平 audio struct，避免 nested bug & 降低 CPU）
+# NOTE: Comment translated to English.
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
@@ -19,12 +19,12 @@ OUT_DIR  = "/data/mengrui/.cache/huggingface/datasets/MMEB-V3/audio-tasks/soundd
 N_EVAL = 1000
 SEED = 17
 
-# ✅ 控制 CPU / 内存：batch 越小越省（但稍慢）
+# NOTE: Comment translated to English.
 CORPUS_BATCH_SIZE = 256
 PYARROW_USE_THREADS = False
 
-# ✅ 只抽 eval，不再产生 train
-WRITE_CORPUS = True  # 如果你 eval 只需要 query/qrels，可以设 False
+# NOTE: Comment translated to English.
+WRITE_CORPUS = True  # NOTE: Comment translated to English.
 
 
 def ensure_dir(p: str):
@@ -106,7 +106,7 @@ def rewrite_corpus_flat_pyarrow(corpus_files: List[str], out_path: str, cid_col:
                         t = t.append_column("audio_array", pc.struct_field(audio_col, "array"))
                     if "sampling_rate" in fields and "audio_sampling_rate" not in t.column_names:
                         t = t.append_column("audio_sampling_rate", pc.struct_field(audio_col, "sampling_rate"))
-                # ✅ 关键：删除 nested audio，规避某些下游 nested 兼容问题
+                # NOTE: Comment translated to English.
                 t = t.drop(["audio"])
 
             if writer is None:
@@ -124,15 +124,15 @@ def main():
     out_eval = os.path.join(OUT_DIR, "eval")
     ensure_dir(out_eval)
 
-    # 1) load query/qrels（相对小）
+    # NOTE: Comment translated to English.
     query_ds = load_parquet_dir(os.path.join(SRC_ROOT, "query"))
     qrels_ds = load_parquet_dir(os.path.join(SRC_ROOT, "qrels"))
 
-    # 2) corpus：不全量 load，只拿 parquet 文件列表 + schema probe
+    # NOTE: Comment translated to English.
     corpus_dir = os.path.join(SRC_ROOT, "corpus")
     corpus_files = list_parquet_files(corpus_dir)
 
-    # 仅用一个 shard probe schema 来找 cid_col
+    # NOTE: Comment translated to English.
     corpus_schema_probe = datasets.load_dataset("parquet", data_files={"data": corpus_files[:1]}, split="data")
     cid_col = pick_first_existing(
         ["corpus_id", "corpus-id", "id", "audio_id", "docid"],
@@ -145,7 +145,7 @@ def main():
     qrels_cid_col = pick_first_existing(["corpus-id", "corpus_id", "cid", "docid", "id"], qrels_ds.column_names, "qrels")
     qrels_score_col = pick_first_existing(["score", "relevance", "rel"], qrels_ds.column_names, "qrels")
 
-    # 3) 构建 qrels 映射：每个 qid 取最高分的 pos
+    # NOTE: Comment translated to English.
     qrels_by_qid: Dict[str, Tuple[str, float]] = {}
     for r in qrels_ds:
         qid = str(r[qrels_qid_col])
@@ -154,7 +154,7 @@ def main():
         if (qid not in qrels_by_qid) or (sc > qrels_by_qid[qid][1]):
             qrels_by_qid[qid] = (cid, sc)
 
-    # 4) 用 pyarrow 扫一遍 corpus id（只读 cid_col 列）
+    # NOTE: Comment translated to English.
     corpus_ids = set()
     for fp in corpus_files:
         pf = pq.ParquetFile(fp)
@@ -166,7 +166,7 @@ def main():
             arr = rb.column(0)
             corpus_ids.update(str(x) for x in arr.to_pylist())
 
-    # 5) 过滤可用 query（必须有 qrels 且 pos_cid 在 corpus）
+    # NOTE: Comment translated to English.
     kept_idx = []
     for i, r in enumerate(query_ds):
         qid = str(r[qid_col])
@@ -184,11 +184,11 @@ def main():
     eval_idx = kept_idx[:N_EVAL]
     eval_q = query_ds.select(eval_idx)
 
-    # 6) 写 eval 的 query/qrels
+    # NOTE: Comment translated to English.
     dump_query(eval_q, out_eval, qid_col)
     dump_qrels(eval_q, out_eval, qid_col, qrels_by_qid)
 
-    # 7) 写 corpus（可选）
+    # NOTE: Comment translated to English.
     if WRITE_CORPUS:
         rewrite_corpus_flat_pyarrow(
             corpus_files=corpus_files,

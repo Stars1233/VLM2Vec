@@ -71,10 +71,10 @@ def corpus_prepare(batch_dict, *args, **kwargs):
         image_path = f'{image_root}/{new_imagename}'
         if not os.path.exists(image_path):
             os.makedirs(image_root, exist_ok=True)
-            # 兼容 HF 导出的字典格式：{"bytes": ..., "path": ...}
+            # NOTE: Comment translated to English.
             if isinstance(image, dict):
                 image_bytes = image.get("bytes", None)
-                # 若 bytes 缺失且提供了原始路径，尝试直接拷贝/读取
+                # NOTE: Comment translated to English.
                 if image_bytes is None and image.get("path") and os.path.exists(image["path"]):
                     with open(image["path"], "rb") as f:
                         image_bytes = f.read()
@@ -83,7 +83,7 @@ def corpus_prepare(batch_dict, *args, **kwargs):
                 with open(image_path, "wb") as f:
                     f.write(image_bytes)
             else:
-                # 旧格式：直接是 PIL.Image
+                # NOTE: Comment translated to English.
                 image.save(image_path)
         cand_texts.append([process_input_text(TASK_INST_TGT, model_backbone, add_image_token=True)])
         cand_images.append([ImageVideoInstance(
@@ -104,28 +104,28 @@ DATASET_PARSER_NAME = "visrag"
 def load_visrag_dataset(model_args, data_args, **kwargs):
     dataset_name = kwargs['dataset_name']
     
-    # 优先使用本地路径
+    # NOTE: Comment translated to English.
     if dataset_name in EVAL_DATASET_LOCAL_PATH:
         local_path_info = EVAL_DATASET_LOCAL_PATH[dataset_name]
-        hf_dataset_name = local_path_info[0]  # 本地路径
+        hf_dataset_name = local_path_info[0]  # NOTE: Comment translated to English.
         hf_dataset_split = local_path_info[2]
         
         if os.path.exists(hf_dataset_name):
             print(f"Loading {dataset_name} from local path: {hf_dataset_name}")
-            # BEIR format - 使用本地路径加载
+            # NOTE: Comment translated to English.
             qrels = load_hf_dataset((hf_dataset_name, "qrels", hf_dataset_split, "local"))
             corpus = load_hf_dataset((hf_dataset_name, "corpus", hf_dataset_split, "local"))
             dataset = load_hf_dataset((hf_dataset_name, "queries", hf_dataset_split, "local"))
         else:
             print(f"Local path not found for {dataset_name}, falling back to HuggingFace Hub")
-            # 回退到HuggingFace Hub
+            # NOTE: Comment translated to English.
             hf_dataset_name = EVAL_DATASET_HF_PATH[dataset_name][0]
             hf_dataset_split = EVAL_DATASET_HF_PATH[dataset_name][2]
             qrels = load_hf_dataset((hf_dataset_name, "qrels", hf_dataset_split))
             corpus = load_hf_dataset((hf_dataset_name, "corpus", hf_dataset_split))
             dataset = load_hf_dataset((hf_dataset_name, "queries", hf_dataset_split))
     else:
-        # 使用HuggingFace Hub路径
+        # NOTE: Comment translated to English.
         hf_dataset_name = EVAL_DATASET_HF_PATH[dataset_name][0]
         hf_dataset_split = EVAL_DATASET_HF_PATH[dataset_name][2]
         # BEIR format

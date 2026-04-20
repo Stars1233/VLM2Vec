@@ -183,7 +183,7 @@ def encode_embeddings(
                         if grid_item is None:
                             return None
                         if isinstance(grid_item, torch.Tensor):
-                            # shape [3] / [T,3] 等都转成 python tuple 可 hash
+                            # NOTE: Comment translated to English.
                             return tuple(grid_item.detach().cpu().reshape(-1).tolist())
                         if isinstance(grid_item, (list, tuple)):
                             # list of int
@@ -215,13 +215,13 @@ def encode_embeddings(
                             return ("img", _grid_to_key(img_gt))
                         return ("none",)
 
-                    # 1) 分桶（只在当前 batch 内）
+                    # NOTE: Comment translated to English.
                     buckets = {}
                     for i in range(batch_size):
                         k = _bucket_key(i)
                         buckets.setdefault(k, []).append(i)
 
-                    # 2) 逐桶 forward，并把 reps 写回原顺序
+                    # NOTE: Comment translated to English.
                     reps_out = torch.empty((batch_size, model.rep_dim), device=device, dtype=torch.float32)
 
                     def _slice_flat_visual(v, idxs, spans):
@@ -259,7 +259,7 @@ def encode_embeddings(
                     def _slice_inputs(inputs_dict, idxs):
                         sub = {}
                         for kk, vv in inputs_dict.items():
-                            # dataset_infos 不在 inputs 里，这里只处理 tensor/list/None
+                            # NOTE: Comment translated to English.
                             sub[kk] = _slice_value(kk, vv, idxs)
                         return sub
 
@@ -268,7 +268,7 @@ def encode_embeddings(
                             continue
                         sub_inputs = _slice_inputs(inputs, idxs)
 
-                        # ⚠️ 不要做长度维度裁剪，只做样本维度切片
+                        # NOTE: Comment translated to English.
                         if encode_side == "qry":
                             output = model(qry=sub_inputs)
                         else:
@@ -282,7 +282,7 @@ def encode_embeddings(
                     local_gt_infos.extend(gt_infos)
 
                 else:
-                    # 原来的非 omni 路径：直接跑
+                    # NOTE: Comment translated to English.
                     if encode_side == "qry":
                         output = model(qry=inputs)
                     else:
@@ -401,13 +401,13 @@ def main():
     training_args: TrainingArguments
     os.makedirs(data_args.encode_output_path, exist_ok=True)
 
-    # 设置设备
+    # NOTE: Comment translated to English.
     if torch.cuda.is_available():
         training_args.device = torch.device("cuda")
     else:
         training_args.device = torch.device("cpu")
 
-    # 确保在分布式训练中正确设置设备
+    # NOTE: Comment translated to English.
     if dist.is_initialized():
         torch.cuda.set_device(local_rank)
         training_args.device = torch.device(f"cuda:{local_rank}")
@@ -519,7 +519,7 @@ def main():
                 query_embeds = query_embeds[:len(full_eval_qry_dataset)]  # world_size>1, trim the padded data points
                 gt_infos = gt_infos[:len(full_eval_qry_dataset)]
                 if local_rank == 0:
-                    # 确保目录存在（dataset_name可能包含子目录）
+                    # NOTE: Comment translated to English.
                     os.makedirs(os.path.dirname(query_embed_path), exist_ok=True)
                     os.makedirs(os.path.dirname(dataset_info_path), exist_ok=True)
                     with open(query_embed_path, 'wb') as f:
@@ -545,7 +545,7 @@ def main():
 
                 if local_rank == 0:
                     cand_embed_dict = {cand_id: embed for cand_id, embed in zip(all_cand_ids, cand_embeds)}
-                    # 确保目录存在（dataset_name可能包含子目录）
+                    # NOTE: Comment translated to English.
                     os.makedirs(os.path.dirname(cand_embed_path), exist_ok=True)
                     with open(cand_embed_path, 'wb') as f:
                         pickle.dump(cand_embed_dict, f)

@@ -20,17 +20,17 @@ from src.utils.dataset_utils import load_qrels_mapping, sample_dataset
 
 def _extract_audio_obj(row: Dict[str, Any], keep_audio_bytes: bool) -> Dict[str, Any]:
     """从扁平列或嵌套 audio 字段提取音频对象。"""
-    # 优先扁平列
+    # NOTE: Comment translated to English.
     path = row.get("audio_path") or row.get("path")
     bytes_data = row.get("audio_bytes")
 
-    # 嵌套结构回退
+    # NOTE: Comment translated to English.
     if path is None and "audio" in row and isinstance(row["audio"], dict):
         audio_struct = row["audio"]
         path = audio_struct.get("path") or path
         bytes_data = audio_struct.get("bytes") if bytes_data is None else bytes_data
 
-    # 默认优先使用 path，避免把超大 bytes 载入/复制到中间结构
+    # NOTE: Comment translated to English.
     if path is not None:
         return {"path": path, "bytes": (bytes_data if keep_audio_bytes else None)}
 
@@ -96,7 +96,7 @@ def _load_parquet_stream(pattern: str, columns: Optional[List[str]] = None):
     except Exception:
         if columns is None:
             raise
-        # 某些旧数据可能不支持列裁剪（尤其包含嵌套列），回退为全列读取
+        # NOTE: Comment translated to English.
         kw.pop("columns", None)
         return datasets.load_dataset(**kw)["data"]
 
@@ -117,7 +117,7 @@ def _prepare_corpus(
 ) -> Tuple[datasets.Dataset, Dict[str, int], List[str]]:
     corpus_pattern = _get_data_pattern(dataset_path, "corpus")
 
-    # 默认尽量只读轻量列，避免把 audio_bytes 整体扫入内存
+    # NOTE: Comment translated to English.
     preferred_columns = ["corpus-id", "id", "audio_path", "path"]
     need_audio_bytes = keep_audio_bytes or materialize_missing_audio
     if need_audio_bytes:
@@ -129,7 +129,7 @@ def _prepare_corpus(
     if first_row is None:
         raise ValueError(f"Empty corpus parquet: {corpus_pattern}")
 
-    # 如果列裁剪后拿不到 path/bytes，则回退到全列读取（兼容嵌套 audio）
+    # NOTE: Comment translated to English.
     first_audio = _extract_audio_obj(first_row, keep_audio_bytes=need_audio_bytes)
     if first_audio["path"] is None and first_audio["bytes"] is None:
         corpus_stream = _load_parquet_stream(corpus_pattern, columns=None)

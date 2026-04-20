@@ -2,6 +2,7 @@
 import os
 import glob
 import random
+import hashlib
 from collections import defaultdict
 from typing import Dict, Any, List, Tuple, Optional
 
@@ -14,10 +15,10 @@ OUT_DIR  = "/data/mengrui/.cache/huggingface/datasets/MMEB-V3/audio-tasks/nsynth
 N_EVAL = 1000
 SEED = 17
 
-# 类别控制：None=保留全部；否则保留出现频率最高的前 K 类
+# NOTE: Comment translated to English.
 MAX_CLASSES: Optional[int] = None  # e.g., 50 or 100, default None
 
-# 每类至少保留多少条在 eval（防止某类完全消失；如果类太多会导致达不到 N_EVAL）
+# NOTE: Comment translated to English.
 MIN_PER_CLASS_EVAL = 1
 
 
@@ -26,7 +27,7 @@ def ensure_dir(p: str):
 
 
 def load_all_parquets(root: str) -> datasets.Dataset:
-    # 兼容：nsynth 可能是多 parquet 分片，可能在 root 或子目录
+    # NOTE: Comment translated to English.
     files = sorted(glob.glob(os.path.join(root, "**", "*.parquet"), recursive=True))
     if not files:
         raise FileNotFoundError(f"No parquet files found under: {root}")
@@ -41,6 +42,39 @@ def write_parquet(rows: List[Dict[str, Any]], out_path: str):
     datasets.Dataset.from_dict(obj).to_parquet(out_path)
 
 
+def build_portable_audio_path(source_path: str, index: int) -> str:
+    ext = os.path.splitext(source_path)[1].lower()
+    if not ext:
+        ext = ".wav"
+    digest = hashlib.sha1((source_path or f"row-{index}").encode("utf-8")).hexdigest()[:10]
+    return f"audio/{index:06d}-{digest}{ext}"
+
+
+def to_portable_audio(audio_obj: Any, fallback_path: Optional[str], portable_path: str) -> Dict[str, Any]:
+    raw_bytes = None
+    source_path = fallback_path
+
+    if isinstance(audio_obj, dict):
+        raw_bytes = audio_obj.get("bytes")
+        source_path = audio_obj.get("path") or fallback_path
+    elif isinstance(audio_obj, (bytes, bytearray, memoryview)):
+        raw_bytes = bytes(audio_obj)
+    elif isinstance(audio_obj, str):
+        source_path = audio_obj
+
+    if raw_bytes is None:
+        if not source_path:
+            raise ValueError("Cannot materialize audio bytes: no source path and no inline bytes")
+        if not os.path.isfile(source_path):
+            raise FileNotFoundError(f"Audio file not found while materializing bytes: {source_path}")
+        with open(source_path, "rb") as f:
+            raw_bytes = f.read()
+    else:
+        raw_bytes = bytes(raw_bytes)
+
+    return {"path": portable_path, "bytes": raw_bytes}
+
+
 def main():
     rng = random.Random(SEED)
 
@@ -49,11 +83,11 @@ def main():
 
     ds = load_all_parquets(SRC_ROOT)
 
-    # --------- 1) 识别 query-id：NSynth 没有 id，就用 WavPath ----------
+    # NOTE: Comment translated to English.
     if "WavPath" not in ds.column_names:
         raise KeyError(f"[nsynth] missing WavPath. available={ds.column_names}")
 
-    # --------- 2) 识别 label 列：优先 instrument_family_str，其次 instrument_str ----------
+    # NOTE: Comment translated to English.
     label_col_candidates = ["instrument_family_str", "instrument_str", "instrument_family", "instrument"]
     label_col = None
     for c in label_col_candidates:
@@ -63,7 +97,7 @@ def main():
     if label_col is None:
         raise KeyError(f"[nsynth] cannot find label column in {label_col_candidates}. available={ds.column_names}")
 
-    # --------- 3) 统计类频次 + 可选截断 MAX_CLASSES ----------
+    # NOTE: Comment translated to English.
     label_counts = defaultdict(int)
     for r in ds:
         lab = str(r[label_col])
@@ -75,8 +109,8 @@ def main():
 
     labels_set = set(labels_sorted)
 
-    # --------- 4) 为每类收集 index，做一个简单“分层抽样”拿到 N_EVAL ----------
-    # 先把每类至少拿 MIN_PER_CLASS_EVAL 条
+    # NOTE: Comment translated to English.
+    # NOTE: Comment translated to English.
     per_label_indices = defaultdict(list)
     for i, r in enumerate(ds):
         lab = str(r[label_col])
@@ -115,8 +149,8 @@ def main():
     rng.shuffle(eval_idx)
     eval_ds = ds.select(eval_idx)
 
-    # --------- 5) 构造 corpus_labels（分类任务 candidates=labels） ----------
-    # corpus-id 用 0..C-1
+    # NOTE: Comment translated to English.
+    # NOTE: Comment translated to English.
     labels_final = sorted({str(r[label_col]) for r in eval_ds})
     label2id = {lab: i for i, lab in enumerate(labels_final)}
 
@@ -125,37 +159,39 @@ def main():
         corpus_rows.append({
             "corpus-id": str(cid),
             "label": lab,
-            "text": lab,  # 兼容下游把 cand_text 当作 text
+            "text": lab,  # NOTE: Comment translated to English.
         })
 
-    # --------- 6) 构造 query + qrels ----------
-    # query-id 用 WavPath 的 basename（更短），避免特别长；同时保留原 WavPath 方便 debug
+    # NOTE: Comment translated to English.
+    # NOTE: Comment translated to English.
     query_rows = []
     qrels_rows = []
 
-    for r in eval_ds:
+    for idx, r in enumerate(eval_ds):
         wav_path = str(r["WavPath"])
         qid = os.path.basename(wav_path)  # e.g., "acoustic_guitar_000-123.wav"
         lab = str(r[label_col])
         cid = str(label2id[lab])
+        portable_audio_path = build_portable_audio_path(wav_path, idx)
+        portable_audio = to_portable_audio(r.get("audio"), wav_path, portable_audio_path)
 
-        # query: 保留 audio 对象（你的 pipeline 通常需要）
+        # NOTE: Comment translated to English.
         query_rows.append({
             "query-id": qid,
-            "WavPath": wav_path,
-            "audio": r.get("audio"),  # parquet 里一般是 Audio 特征结构
+            "WavPath": portable_audio["path"],
+            "audio": portable_audio,  # NOTE: Comment translated to English.
             "label": lab,
             "label_id": int(cid),
         })
 
-        # qrels: 复用 query-id/corpus-id/score 格式
+        # NOTE: Comment translated to English.
         qrels_rows.append({
             "query-id": qid,
             "corpus-id": cid,
             "score": 1,
         })
 
-    # --------- 7) 写出 ----------
+    # NOTE: Comment translated to English.
     write_parquet(query_rows, os.path.join(out_eval, "query.parquet"))
     write_parquet(qrels_rows, os.path.join(out_eval, "qrels.parquet"))
     write_parquet(corpus_rows, os.path.join(out_eval, "corpus_labels.parquet"))

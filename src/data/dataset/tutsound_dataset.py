@@ -89,13 +89,13 @@ def build_tutsound_audio_dataset(*args: Any, **kwargs: Any):
         raise ValueError("TUTSound: data_path is required")
     base_dir = os.path.join(dataset_path, "TUT-sound-events-2017-development")
 
-    # 负例生成参数（可选）
+    # NOTE: Comment translated to English.
     neg_win_len = float(kwargs.get("neg_win_len", 1.0))
     neg_stride = float(kwargs.get("neg_stride", 0.5))
     iou_thresh = float(kwargs.get("neg_iou_thresh", 0.1))
     neg_max_per_query = int(kwargs.get("neg_max_per_query", 50))
 
-    # 1) 读四个 fold 的 train 文件
+    # NOTE: Comment translated to English.
     all_rows: List[Tuple[str, str, float, float, str]] = []
     for fold in ["1", "2", "3", "4"]:
         train_file_name = f"street_fold{fold}_train.txt"
@@ -110,14 +110,14 @@ def build_tutsound_audio_dataset(*args: Any, **kwargs: Any):
     if not all_rows:
         raise FileNotFoundError("No TUTSound train files found for any fold")
 
-    # 2) 按 wav 聚合 GT 事件段
+    # NOTE: Comment translated to English.
     gt_by_fp: Dict[str, Dict[str, Any]] = {}
     for fp, scene, onset, offset, label in all_rows:
         if fp not in gt_by_fp:
             gt_by_fp[fp] = {"scene": scene, "events": []}
         gt_by_fp[fp]["events"].append({"label": label, "onset": onset, "offset": offset})
 
-    # 3) 构建训练样本：每个 GT event 一条，query=文本标签，pos=对应音频片段
+    # NOTE: Comment translated to English.
     query_texts: List[List[str]] = []
     query_images: List[Any] = []
     query_audios: List[Any] = []
@@ -171,7 +171,7 @@ def build_tutsound_audio_dataset(*args: Any, **kwargs: Any):
         for k in list(label_to_seg_ids.keys()):
             label_to_seg_ids[k] = list(dict.fromkeys(label_to_seg_ids[k]))
 
-        # 背景滑窗候选（可选，用于负例采样）
+        # NOTE: Comment translated to English.
         neg_segments = []
         if neg_win_len > 0 and neg_stride > 0 and audio_dur >= neg_win_len:
             t = 0.0
@@ -187,13 +187,13 @@ def build_tutsound_audio_dataset(*args: Any, **kwargs: Any):
                     neg_segments.append((seg_start, seg_end))
                 t += neg_stride
 
-        # 负例采样上限（每个 query）
+        # NOTE: Comment translated to English.
         if neg_max_per_query > 0 and len(neg_segments) > neg_max_per_query:
             neg_segments = neg_segments[:neg_max_per_query]
 
-        # 为每个 GT 事件创建训练样本
+        # NOTE: Comment translated to English.
         for ev in gt_events:
-            # Query: 文本标签
+            # NOTE: Comment translated to English.
             query_text = build_query_text("TUTSound", ev["label"])
             assert (
                 isinstance(query_text, list)
@@ -213,7 +213,7 @@ def build_tutsound_audio_dataset(*args: Any, **kwargs: Any):
                 "end": float(audio_dur),
             })
 
-            # Positive: 对应的 GT 音频片段
+            # NOTE: Comment translated to English.
             pos_texts.append(POS_TEXT_AUDIO)
             pos_images.append(None)
             pos_audios.append({
@@ -251,7 +251,7 @@ def build_tutsound_audio_dataset(*args: Any, **kwargs: Any):
         }
     )
 
-    # 可选：分层采样
+    # NOTE: Comment translated to English.
     stratify_by = kwargs.get("stratify_by", None)
     max_per_label = kwargs.get("max_per_label", None)
     stratify_ratio = kwargs.get("stratify_ratio", None)

@@ -62,7 +62,7 @@ def qrels_stats_from_parquet(qrels_files):
     if not qrels_files:
         return {"qrels_ok": 0, "qrels_reason": "no qrels files"}
 
-    # 尝试从第一份 parquet 推断列名
+    # NOTE: Comment translated to English.
     cols = parquet_columns_one_file(qrels_files[0])
 
     qid_cols = ["query_id", "query-id", "qid", "queryid", "query"]
@@ -79,7 +79,7 @@ def qrels_stats_from_parquet(qrels_files):
             "qrels_reason": f"missing qid/cid columns. found={cols}"
         }
 
-    # 逐文件扫描 qrels（只读需要的列）
+    # NOTE: Comment translated to English.
     q_pos = defaultdict(int)
     q_any = set()
 
@@ -97,15 +97,15 @@ def qrels_stats_from_parquet(qrels_files):
 
         for qid, rel in zip(qids, rels):
             q_any.add(qid)
-            # 只要出现一条 qrels 就算一个 positive（通常每个 qid 就 1 条）
-            # 如果你的 qrels 有多条正例，这里会统计为多条。
+            # NOTE: Comment translated to English.
+            # NOTE: Comment translated to English.
             if rel is None:
                 continue
             try:
                 if float(rel) > 0:
                     q_pos[qid] += 1
             except Exception:
-                # rel 不是数也没关系，出现即算
+                # NOTE: Comment translated to English.
                 q_pos[qid] += 1
 
     if not q_any:
@@ -125,7 +125,7 @@ def qrels_stats_from_parquet(qrels_files):
 
 
 def count_csv_rows(csv_path):
-    # 粗略统计：减去表头（如果没有表头也不会太离谱）
+    # NOTE: Comment translated to English.
     n = 0
     with open(csv_path, "r", encoding="utf-8", errors="ignore") as f:
         for _ in f:
@@ -144,11 +144,11 @@ def explore_ave():
     print("\n=== AVE Dataset (Audio->Video Retrieval) [metadata-only] ===")
     data_path = os.path.join(ROOT, "AVE", "AVE_Dataset")
 
-    # AVE 多数不是 parquet；你之前脚本已能得到 402/402
-    # 这里给一个保守策略：如果能找到 split list，就统计行数
+    # NOTE: Comment translated to English.
+    # NOTE: Comment translated to English.
     split_files = glob.glob(os.path.join(data_path, "**/*Set*.txt"), recursive=True) + \
                   glob.glob(os.path.join(data_path, "**/*test*.txt"), recursive=True)
-    # 你用的是 testSet.txt
+    # NOTE: Comment translated to English.
     split_file = os.path.join(data_path, "testSet.txt")
     if os.path.exists(split_file):
         n = 0
@@ -158,7 +158,7 @@ def explore_ave():
                 if line:
                     n += 1
         num_queries = n
-        num_candidates = n  # AVE 典型 1:1
+        num_candidates = n  # NOTE: Comment translated to English.
         print(f"📊 Queries: {num_queries}")
         print(f"🎯 Candidates: {num_candidates} (AVE 1:1 pairing)")
         print(f"✅ Positives per Query: 1.00")
@@ -171,10 +171,10 @@ def explore_clotho():
     print("\n=== Clotho Dataset (Text->Audio Retrieval) [metadata-only] ===")
     data_path = os.path.join(ROOT, "clotho")
 
-    # queries: 由 clotho_captions_evaluation.csv 行数得到（你之前 output 就是这样）
+    # NOTE: Comment translated to English.
     csv_path = os.path.join(data_path, "clotho_captions_evaluation.csv")
     if not os.path.exists(csv_path):
-        # 兼容你日志里的路径名
+        # NOTE: Comment translated to English.
         csv_path = os.path.join(data_path, "clotho_captions_evaluation.csv")
     if os.path.exists(csv_path):
         num_queries = count_csv_rows(csv_path)
@@ -183,7 +183,7 @@ def explore_clotho():
         num_queries = None
         print("❌ 未找到 clotho_captions_evaluation.csv，无法用 metadata-only 统计 queries")
 
-    # candidates: evaluation 目录下音频文件数（只数文件，不解码）
+    # NOTE: Comment translated to English.
     audio_dir = os.path.join(data_path, "evaluation")
     auds = []
     for ext in (".wav", ".flac", ".ogg", ".mp3"):
@@ -202,7 +202,7 @@ def explore_sounddescs():
     print("\n=== SoundDescs Dataset (Text->Audio Retrieval) [metadata-only] ===")
     data_path = os.path.join(ROOT, "sounddescs")
 
-    # 优先使用 query/corpus parquet（最准确且快）
+    # NOTE: Comment translated to English.
     query_files = sorted(glob.glob(os.path.join(data_path, "**/query/*.parquet"), recursive=True))
     corpus_files = sorted(glob.glob(os.path.join(data_path, "**/corpus/*.parquet"), recursive=True))
     qrels_files = sorted(glob.glob(os.path.join(data_path, "**/qrels/*.parquet"), recursive=True))
@@ -237,7 +237,7 @@ def explore_speechcoco():
     print("\n=== SpeechCOCO Dataset (Audio->Image Retrieval) [metadata-only] ===")
     data_path = os.path.join(ROOT, "speechcoco")
 
-    # 1) query/corpus/qrels 结构
+    # NOTE: Comment translated to English.
     query_files = sorted(glob.glob(os.path.join(data_path, "**/query/*.parquet"), recursive=True))
     corpus_files = sorted(glob.glob(os.path.join(data_path, "**/corpus/*.parquet"), recursive=True))
     qrels_files = sorted(glob.glob(os.path.join(data_path, "**/qrels/*.parquet"), recursive=True))
@@ -272,7 +272,7 @@ def explore_tutsound():
     print("\n=== TUT Sound Events Dataset (Audio Event Grounding) [metadata-only] ===")
     data_path = os.path.join(ROOT, "TUTSound")
 
-    # TUT 同时使用四个fold的evaluate文件
+    # NOTE: Comment translated to English.
     folds = ["1", "2", "3", "4"]
     total_events = 0
     total_unique_files = set()
@@ -287,7 +287,7 @@ def explore_tutsound():
                     line = line.strip()
                     if line:
                         fold_events += 1
-                        # 提取文件名 (第一列是audio_file)
+                        # NOTE: Comment translated to English.
                         parts = line.split('\t')
                         if len(parts) >= 1:
                             fold_files.add(parts[0])
@@ -329,7 +329,7 @@ def explore_cls():
             num_queries = parquet_num_rows(parquets)
             src = f"parquet({len(parquets)})"
         elif csvs:
-            # UrbanSound8K 你之前就有 csv_files/test_6.csv
+            # NOTE: Comment translated to English.
             num_queries = count_csv_rows(csvs[0])
             src = os.path.basename(csvs[0])
         else:

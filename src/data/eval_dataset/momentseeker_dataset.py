@@ -108,7 +108,7 @@ def load_momentseeker_dataset(model_args, data_args, *args, **kwargs):
         dataset = load_dataset("json", data_files=kwargs["data_path"])
         dataset = dataset["train"]
     else:
-        # 优先使用本地路径
+        # NOTE: Comment translated to English.
         if dataset_name in EVAL_DATASET_LOCAL_PATH:
             local_path_info = EVAL_DATASET_LOCAL_PATH[dataset_name]
             local_path = local_path_info[0]

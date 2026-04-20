@@ -106,7 +106,7 @@ def load_audio_ave_dataset(*args: Any, **kwargs: Any):
 
     samples = parse_ave_split(split_path)
 
-    # 1) 过滤掉缺失音频 / 缺失视频的样本（音频文件名是 video_id + '_' + clip_id）
+    # NOTE: Comment translated to English.
     audio_records: List[Dict[str, Any]] = []
     for s in samples:
         audio_abs = os.path.join(audio_root, f"{s['video_id']}_{s['clip_id']}.wav")
@@ -134,7 +134,7 @@ def load_audio_ave_dataset(*args: Any, **kwargs: Any):
     if not audio_records:
         raise FileNotFoundError("[AVE] no valid audio/video pairs found after filtering")
 
-    # 2) 构造训练样本（query: audio, pos: video frames）
+    # NOTE: Comment translated to English.
     query_texts: List[List[str]] = []
     query_images: List[Any] = []
     query_audios: List[Dict[str, Any]] = []

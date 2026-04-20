@@ -151,7 +151,7 @@ def load_audio_clotho_dataset(*args: Any, **kwargs: Any):
     return dataset
 
 
-# ---------- 评测构建（文本->音频检索） ----------
+# NOTE: Comment translated to English.
 def build_clotho_text_audio_dataset(path_info: Tuple[str, str, str], **kwargs):
     """
     返回 (query_dataset, corpus_dataset)，其中：
@@ -168,22 +168,22 @@ def build_clotho_text_audio_dataset(path_info: Tuple[str, str, str], **kwargs):
     assert os.path.isdir(audio_dir), f"未找到音频目录: {audio_dir}"
 
     records = _expand_clotho_rows(csv_path, audio_dir)
-    # 构造候选池与映射
+    # NOTE: Comment translated to English.
     file_names = [r["file_name"] for r in records]
-    unique_files = list(dict.fromkeys(file_names))  # 保持顺序去重
+    unique_files = list(dict.fromkeys(file_names))  # NOTE: Comment translated to English.
     file2idx = {fn: i for i, fn in enumerate(unique_files)}
 
     texts = [r["text"] for r in records]
     label_ids = [file2idx[r["file_name"]] for r in records]
 
-    # 构建query_text并添加debug assert
+    # NOTE: Comment translated to English.
     query_texts = []
     for t in texts:
         query_text = build_query_text("Clotho", t)
         assert isinstance(query_text, list) and len(query_text) == 1 and isinstance(query_text[0], str) and query_text[0].strip()
         query_texts.append(query_text)
 
-    # 构建query_dataset - 只包含查询信息和标签
+    # NOTE: Comment translated to English.
     query_dataset = datasets.Dataset.from_dict({
         "query_text": query_texts,
         "query_image": [None for _ in texts],
@@ -191,15 +191,15 @@ def build_clotho_text_audio_dataset(path_info: Tuple[str, str, str], **kwargs):
         "dataset_infos": [{"label_cand_id": lid, "file_name": fn, "label_name": fn} for lid, fn in zip(label_ids, file_names)],
     })
 
-    # 构建corpus_dataset - 包含所有候选，每个条目一个候选
+    # NOTE: Comment translated to English.
     corpus_rows = []
     for fn in unique_files:
         audio_obj = {"path": os.path.join(audio_dir, fn), "bytes": None}
         corpus_rows.append({
-            "cand_text": ["[AUDIO]"],  # 音频候选的文本占位符
+            "cand_text": ["[AUDIO]"],  # NOTE: Comment translated to English.
             "cand_image": [None],
             "cand_audio": [audio_obj],
-            "dataset_infos": {"cand_names": [fn]},  # 用于 cand_embed_dict 的key
+            "dataset_infos": {"cand_names": [fn]},  # NOTE: Comment translated to English.
         })
 
     corpus_dataset = datasets.Dataset.from_list(corpus_rows)

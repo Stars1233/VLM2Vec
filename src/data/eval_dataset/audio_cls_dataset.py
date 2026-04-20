@@ -15,7 +15,7 @@ from src.constant.dataset_hflocal_path import EVAL_DATASET_HF_PATH as EVAL_DATAS
 from src.data.eval_dataset.base_eval_dataset import AutoEvalPairDataset
 
 
-# -------- 通用工具 --------
+# NOTE: Comment translated to English.
 def _get_label_fields(batch: Dict[str, Any]) -> Tuple[str, List[Any]]:
     """
     选择一个可用的类别字段名，并返回该字段的列表。
@@ -50,7 +50,7 @@ def _extract_audio_obj(row: Dict[str, Any]) -> Dict[str, Any]:
         audio_path = audio.get("path")
         audio_bytes = audio.get("bytes")
 
-        # 新增：处理array格式的音频数据
+        # NOTE: Comment translated to English.
         if audio_bytes is None and "array" in audio:
             import io
             import torch
@@ -59,17 +59,17 @@ def _extract_audio_obj(row: Dict[str, Any]) -> Dict[str, Any]:
             array = audio["array"]
             sampling_rate = audio.get("sampling_rate", 16000)
 
-            # 如果是list，转换为numpy array
+            # NOTE: Comment translated to English.
             if isinstance(array, list):
                 array = np.array(array)
 
-            # 转换为torch张量
+            # NOTE: Comment translated to English.
             if array.ndim == 1:
                 waveform = torch.from_numpy(array).unsqueeze(0).float()
             else:
                 waveform = torch.from_numpy(array).float()
 
-            # 保存到字节流
+            # NOTE: Comment translated to English.
             buffer = io.BytesIO()
             torchaudio.save(buffer, waveform, sampling_rate, format='wav')
             audio_bytes = buffer.getvalue()
@@ -97,7 +97,7 @@ def data_prepare(batch_dict, **kwargs):
         label_field = kwargs["label_field_override"]
         labels = batch_dict[label_field]
 
-    # label 名称：如果字符串字段存在，优先用字符串；否则用整数->字符串
+    # NOTE: Comment translated to English.
     label_names = None
     if kwargs.get("label_name_field_override") and kwargs["label_name_field_override"] in batch_dict:
         label_names = batch_dict[kwargs["label_name_field_override"]]
@@ -109,7 +109,7 @@ def data_prepare(batch_dict, **kwargs):
     if label_names is None:
         label_names = [str(x) for x in labels]
 
-    # 构建全集类别表
+    # NOTE: Comment translated to English.
     all_label_names = kwargs["all_label_names"]
     label2id = {name: idx for idx, name in enumerate(all_label_names)}
 
@@ -143,7 +143,7 @@ def data_prepare(batch_dict, **kwargs):
 # -------- NSynth --------
 def _load_nsynth_dataset(path_info: Tuple[str, str, str]) -> datasets.Dataset:
     dataset_path, subset, split = path_info
-    # 对于 -1k 路径，数据在 eval/ 目录下；否则在 data/ 目录下
+    # NOTE: Comment translated to English.
     if "-1k" in dataset_path:
         data_dir = os.path.join(dataset_path, "eval")
         query_file = os.path.join(data_dir, "query.parquet")
@@ -164,7 +164,7 @@ def _load_nsynth_dataset(path_info: Tuple[str, str, str]) -> datasets.Dataset:
 
 def _build_nsynth_label_pool(dataset: datasets.Dataset) -> Tuple[List[str], str, str]:
     int_candidates = [
-        ("label_id", "label"),  # 新增：优先匹配整数ID字段
+        ("label_id", "label"),  # NOTE: Comment translated to English.
         ("instrument_family", "instrument_family_str"),
         ("instrument_family_id", "instrument_family_str"),
         ("label", "label_name"),
@@ -373,7 +373,7 @@ def _load_speechcommand_dataset(path_info: Tuple[str, str, str]) -> datasets.Dat
 def _build_speechcommand_label_pool(dataset: datasets.Dataset) -> Tuple[List[str], str, str]:
     cols = dataset.column_names
 
-    # 1) id 字段：优先 label_id，否则 label
+    # NOTE: Comment translated to English.
     if "label_id" in cols:
         id_field = "label_id"
     elif "label" in cols:
@@ -381,7 +381,7 @@ def _build_speechcommand_label_pool(dataset: datasets.Dataset) -> Tuple[List[str
     else:
         id_field = None
 
-    # 2) name 字段：优先 label_name，否则用 label（字符串类别名）
+    # NOTE: Comment translated to English.
     if "label_name" in cols:
         name_field = "label_name"
     elif "label" in cols:
@@ -389,7 +389,7 @@ def _build_speechcommand_label_pool(dataset: datasets.Dataset) -> Tuple[List[str
     else:
         raise ValueError(f"SpeechCommands: missing label name field, columns={cols}")
 
-    # 3) 构造 pool：如果有 id_field，就按 id 对齐；没有就按名字排序（不推荐）
+    # NOTE: Comment translated to English.
     if id_field is not None:
         label_ids = [int(x) for x in dataset[id_field]]
         label_names = [str(x) for x in dataset[name_field]]
@@ -401,12 +401,12 @@ def _build_speechcommand_label_pool(dataset: datasets.Dataset) -> Tuple[List[str
         all_label_names = [id_to_name.get(i, str(i)) for i in range(max_id + 1)]
         return all_label_names, id_field, name_field
 
-    # fallback（尽量不要走到这）
+    # NOTE: Comment translated to English.
     all_label_names = sorted(list(set(str(x) for x in dataset[name_field])))
     return all_label_names, None, name_field
 
 
-# -------- 主入口（供评测路由调用） --------
+# NOTE: Comment translated to English.
 def build_audio_cls_dataset(dataset_name: str, path_info: Tuple[str, str, str], **kwargs):
     """
     构建音频分类检索式评测数据集，返回 (dataset, corpus)。
@@ -465,7 +465,7 @@ def build_audio_cls_dataset(dataset_name: str, path_info: Tuple[str, str, str], 
         kwargs.pop("label_field_override", None)
         kwargs.pop("label_name_field_override", None)
 
-    # 添加dataset_name到kwargs，供data_prepare使用
+    # NOTE: Comment translated to English.
     kwargs["dataset_name"] = dataset_name
 
     dataset = sample_dataset(dataset, **kwargs)

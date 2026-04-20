@@ -13,7 +13,7 @@ echo ""
 # ==============================================================================
 CUDA_VISIBLE_DEVICES="4"
 BATCH_SIZE=16
-# NPROC=4 多卡
+# NPROC=4 for multi-GPU.
 # NPROC=4 
 # BATCH_SIZE=16
 # MODALITIES=("image" "video" "tool" "visdoc" "audio" "text")
@@ -25,7 +25,7 @@ OUTPUT_BASEDIR=exps/vlm2vec
 # ==> Define models and their base output paths here
 # Format: "MODEL_NAME;MODEL_BACKBONE;BASE_OUTPUT_PATH[;CHECKPOINT_PATH]"
 declare -a MODEL_SPECS
-# 选项1: 使用本地Qwen2-VL-2B + VLM2Vec-V2.0适配器（推荐，避免网络下载）
+# Option 1: Use local Qwen2-VL-2B + VLM2Vec-V2.0 adapter (recommended to avoid network downloads).
 # MODEL_SPECS+=( "/code/.cache/huggingface/Qwen2-VL-2B;qwen2_vl;$OUTPUT_BASEDIR/VLM2Vec-V2.0-Qwen2VL-2B;/code/.cache/huggingface/VLM2Vec-V2.0" )
 # MODEL_SPECS+=( "/code/.cache/huggingface/omni-embed-nemotron-3b;nvomniembed;$OUTPUT_BASEDIR/omni-embed-nemotron-3b" )
 

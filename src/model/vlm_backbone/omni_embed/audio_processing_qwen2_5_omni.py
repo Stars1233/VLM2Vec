@@ -20,8 +20,8 @@ def _to_tensor(audio: AudioInput) -> torch.Tensor:
 
 class Qwen2_5_OmniAudioProcessor:
     """
-    音频处理器：将原始波形转换为 128-dim 梅尔频谱图
-    与 Qwen2.5-Omni 模型兼容（期望 input_features shape: [B, 128, T]）
+    Audio processor that converts raw waveforms into 128-dim mel spectrograms.
+    Compatible with Qwen2.5-Omni (expected input_features shape: [B, 128, T]).
     """
     model_input_names = ["input_features", "feature_attention_mask", "audio_feature_lengths"]
 
@@ -31,7 +31,7 @@ class Qwen2_5_OmniAudioProcessor:
         mono: bool = True,
         normalize: bool = True,
         dtype: torch.dtype = torch.float32,
-        # 梅尔频谱图参数（与 Qwen2AudioProcessor 保持一致）
+        # Mel spectrogram parameters (aligned with Qwen2AudioProcessor).
         n_mels: int = 128,
         n_fft: int = 400,          # 25ms window @ 16kHz
         hop_length: int = 160,     # 10ms stride @ 16kHz
@@ -43,14 +43,14 @@ class Qwen2_5_OmniAudioProcessor:
         self.normalize = normalize
         self.dtype = dtype
         
-        # 梅尔频谱图参数
+        # Mel spectrogram parameters.
         self.n_mels = n_mels
         self.n_fft = n_fft
         self.hop_length = hop_length
         self.f_min = f_min
         self.f_max = f_max if f_max is not None else sample_rate / 2.0
         
-        # 创建 MelSpectrogram 转换器
+        # Build the MelSpectrogram transform.
         self.mel_transform = torchaudio.transforms.MelSpectrogram(
             sample_rate=sample_rate,
             n_fft=n_fft,
@@ -81,23 +81,23 @@ class Qwen2_5_OmniAudioProcessor:
 
     def preprocess(self, audios: Union[AudioInput, List[AudioInput]], return_tensors: Optional[str] = None, sampling_rate: Optional[int] = None) -> BatchFeature:
         """
-        将音频波形转换为梅尔频谱图
+        Convert audio waveforms to mel spectrograms.
         
         Args:
-            audios: 音频波形列表（每个是 1D numpy.ndarray 或 torch.Tensor）
-            return_tensors: 返回张量类型 ("pt" for PyTorch)
-            sampling_rate: 采样率（可选，用于兼容性检查）
+            audios: List of audio waveforms (each is 1D numpy.ndarray or torch.Tensor).
+            return_tensors: Tensor return type ("pt" for PyTorch).
+            sampling_rate: Sampling rate (optional, used for compatibility checks).
         
         Returns:
-            BatchFeature 包含:
-                - input_features: [B, 128, T_mel] 梅尔频谱图
+            BatchFeature containing:
+                - input_features: [B, 128, T_mel] mel spectrograms
                 - feature_attention_mask: [B, T_mel] attention mask
-                - audio_feature_lengths: [B] 每个样本的有效长度
+                - audio_feature_lengths: [B] valid length per sample
         """
         if not isinstance(audios, (list, tuple)):
             audios = [audios]
 
-        # 检查采样率一致性
+        # Check sampling rate consistency.
         if sampling_rate is not None and sampling_rate != self.sample_rate:
             logger.warning(f"⚠️  Input sampling_rate={sampling_rate} != processor.sample_rate={self.sample_rate}. "
                          f"Make sure audios are resampled to {self.sample_rate}Hz before calling processor.")
@@ -118,18 +118,18 @@ class Qwen2_5_OmniAudioProcessor:
                     "Audio should be waveform tensor/ndarray BEFORE processor."
                 )
 
-            # 1) 预处理波形：归一化、转单声道等
+            # 1) Preprocess waveform: normalization, mono conversion, etc.
             wave = self._process_single(a)  # [1, T] or [C, T]
             
-            # 2) 提取梅尔频谱图
+            # 2) Extract mel spectrogram.
             # wave shape: [1, T] -> mel shape: [1, n_mels, T_mel]
             with torch.no_grad():
                 mel_spec = self.mel_transform(wave)  # [C, n_mels, T_mel]
                 
-                # 转为对数刻度（模仿 Whisper/Qwen2Audio 的做法）
-                mel_spec = torch.log(mel_spec + 1e-9)  # 避免 log(0)
+                # Convert to log scale (similar to Whisper/Qwen2Audio).
+                mel_spec = torch.log(mel_spec + 1e-9)  # Avoid log(0).
                 
-                # 如果是多声道，取平均（通常已经是单声道了）
+                # Average channels if multi-channel (usually already mono).
                 if mel_spec.size(0) > 1:
                     mel_spec = mel_spec.mean(dim=0, keepdim=True)  # [1, n_mels, T_mel]
                 
@@ -139,7 +139,7 @@ class Qwen2_5_OmniAudioProcessor:
             mel_spectrograms.append(mel_spec)
             mel_lengths.append(int(mel_spec.shape[-1]))  # T_mel
 
-        # 3) Padding 到最大长度
+        # 3) Pad to the max length.
         max_mel_len = max(mel_lengths) if mel_lengths else 0
         if max_mel_len == 0:
             raise ValueError("[OmniAudioProcessor] max_mel_len==0, all audios are empty.")
@@ -149,8 +149,8 @@ class Qwen2_5_OmniAudioProcessor:
             # mel_spec shape: [n_mels, T_mel]
             pad = max_mel_len - l
             if pad > 0:
-                # Pad 时间维度（最后一维）
-                mel_spec = torch.nn.functional.pad(mel_spec, (0, pad), value=-9.0)  # 用一个小负值填充
+                # Pad the time dimension (last axis).
+                mel_spec = torch.nn.functional.pad(mel_spec, (0, pad), value=-9.0)  # Fill with a small negative value.
             
             # Attention mask
             mask = torch.zeros((max_mel_len,), dtype=torch.long)
@@ -159,12 +159,12 @@ class Qwen2_5_OmniAudioProcessor:
             batch_list.append(mel_spec)
             mask_list.append(mask)
 
-        # 4) Stack 成 batch
+        # 4) Stack into a batch.
         input_features = torch.stack(batch_list, dim=0)              # [B, n_mels=128, T_mel]
         feature_attention_mask = torch.stack(mask_list, dim=0)       # [B, T_mel]
         audio_feature_lengths = feature_attention_mask.sum(dim=1)    # [B]
 
-        # 只在第一次或每100个batch打印一次（减少日志输出）
+        # Log only for the first batch and then every 100 batches to reduce verbosity.
         if not hasattr(self, '_batch_count'):
             self._batch_count = 0
         self._batch_count += 1

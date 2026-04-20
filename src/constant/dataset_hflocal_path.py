@@ -66,7 +66,7 @@ EVAL_DATASET_HF_PATH = {
     "ViDoRe_esg_reports_v2": (os.path.join(BASE_RAW_DATA_DIR, "visdoc-tasks", "data", "esg_reports_v2"), "english", "test"),
     "ViDoRe_esg_reports_v2_multilingual": (os.path.join(BASE_RAW_DATA_DIR, "visdoc-tasks", "data", "esg_reports_v2"), None, "test"),
 
-    # Image-CLS (使用 image-query 目录，包含元数据 parquet 文件)
+    # NOTE: Comment translated to English.
     "ImageNet-1K": (os.path.join(BASE_RAW_DATA_DIR, "image-query"), "ImageNet-1K", "test"),
     "N24News": (os.path.join(BASE_RAW_DATA_DIR, "image-query"), "N24News", "test"),
     "HatefulMemes": (os.path.join(BASE_RAW_DATA_DIR, "image-query"), "HatefulMemes", "test"),

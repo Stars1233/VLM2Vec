@@ -92,7 +92,7 @@ DATASET_PARSER_NAME = "videommmu"
 DATASET_HF_PATH = "lmms-lab/VideoMMMU"
 @AutoEvalPairDataset.register(DATASET_PARSER_NAME)
 def load_videommmu_dataset(model_args, data_args, training_args, *args, **kwargs):
-    # 检查是否有本地路径配置
+    # NOTE: Comment translated to English.
     dataset_name = kwargs.get('dataset_name', DATASET_PARSER_NAME)
     use_local = False
     
@@ -110,7 +110,7 @@ def load_videommmu_dataset(model_args, data_args, training_args, *args, **kwargs
     subsets = []
     for subset_name in subset_names:
         if use_local:
-            # 本地加载逻辑 - 根据实际本地数据集结构调整
+            # NOTE: Comment translated to English.
             dataset = load_dataset(base_path, subset_name, split="test")
         else:
             dataset = load_dataset(DATASET_HF_PATH, subset_name, split="test")

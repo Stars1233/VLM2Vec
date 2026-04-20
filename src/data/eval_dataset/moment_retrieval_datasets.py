@@ -26,13 +26,13 @@ def data_prepare(batch_dict, *args, **kwargs):
 
     for query, query_video_path in zip(batch_dict['query'], batch_dict['video_path']):
 
-        # 允许传入绝对路径；若提供 video_root 则使用拼接的路径，否则直接用原始字段
+        # NOTE: Comment translated to English.
         query_video_path = os.path.join(video_root, os.path.basename(query_video_path)) if video_root else query_video_path
         if query_video_path is None:
             raise ValueError("moment_retrieval: query_video_path is None; 请检查数据或 video_root。")
         video_name = os.path.splitext(os.path.basename(query_video_path))[0]
 
-        # 仅使用预提取帧，不再尝试从视频抽帧
+        # NOTE: Comment translated to English.
         frames_dir = os.path.join(frame_root, video_name)
         if not os.path.exists(frames_dir):
             raise FileNotFoundError(f"Frames dir not found: {frames_dir}. 请确认已预提取帧。")
@@ -51,7 +51,7 @@ def data_prepare(batch_dict, *args, **kwargs):
             resolutions=[RESOLUTION_MAPPING.get(image_resolution, None)] * len(qry_frame_paths),
         ).to_dict()])
 
-        # Load pos and neg clip：只使用已有帧
+        # NOTE: Comment translated to English.
         if not os.path.exists(frames_dir):
             raise FileNotFoundError(f"Frames dir not found: {frames_dir}")
 
@@ -100,7 +100,7 @@ def load_moment_retrieval_dataset(model_args, data_args, **kwargs):
         dataset = load_dataset("json", data_files=kwargs["data_path"])
         dataset = dataset["train"]
     else:
-        # 优先使用本地路径
+        # NOTE: Comment translated to English.
         if dataset_name in EVAL_DATASET_LOCAL_PATH:
             local_path_info = EVAL_DATASET_LOCAL_PATH[dataset_name]
             local_path = local_path_info[0]

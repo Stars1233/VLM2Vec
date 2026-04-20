@@ -22,3 +22,7 @@ core.*
 Environment
 exps/
 *.whl
+
+# OmniSET: notebooks + runtime outputs
+OmniSET/notebooks/
+OmniSET/outputs/

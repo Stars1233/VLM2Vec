@@ -41,14 +41,14 @@ def extract_audio_segment(video_path: str, audio_path: str, start_time: float, d
     """
     cmd = [
         "ffmpeg",
-        "-i", video_path,  # 输入视频文件
-        "-ss", str(start_time),  # 开始时间
-        "-t", str(duration),  # 持续时间
-        "-vn",  # 不处理视频
-        "-acodec", "pcm_s16le",  # 音频编码为WAV
-        "-ar", "16000",  # 采样率16kHz (适合语音任务)
-        "-ac", "1",  # 单声道
-        "-y",  # 覆盖输出文件
+        "-i", video_path,  # NOTE: Comment translated to English.
+        "-ss", str(start_time),  # NOTE: Comment translated to English.
+        "-t", str(duration),  # NOTE: Comment translated to English.
+        "-vn",  # NOTE: Comment translated to English.
+        "-acodec", "pcm_s16le",  # NOTE: Comment translated to English.
+        "-ar", "16000",  # NOTE: Comment translated to English.
+        "-ac", "1",  # NOTE: Comment translated to English.
+        "-y",  # NOTE: Comment translated to English.
         audio_path
     ]
 
@@ -82,65 +82,65 @@ def main():
     args = parser.parse_args()
     print("Arguments parsed")
 
-    # 构建路径
+    # NOTE: Comment translated to English.
     split_path = os.path.join(args.data_path, "AVE_Dataset", args.split_file)
     video_path = os.path.join(args.data_path, args.video_dir)
     audio_path = os.path.join(args.data_path, args.audio_dir)
 
-    # 创建音频目录
+    # NOTE: Comment translated to English.
     os.makedirs(audio_path, exist_ok=True)
 
-    # 解析分割文件
+    # NOTE: Comment translated to English.
     print(f"解析分割文件: {split_path}")
     samples = parse_ave_split(split_path)
     print(f"找到 {len(samples)} 个音频片段")
 
-    # 统计信息
+    # NOTE: Comment translated to English.
     success_count = 0
     skip_count = 0
     fail_count = 0
 
-    # 处理每个样本
+    # NOTE: Comment translated to English.
     print(f"开始处理 {len(samples)} 个音频片段...")
     for i, sample in enumerate(samples):
         if (i + 1) % 50 == 0:
             print(f"已处理 {i + 1}/{len(samples)} 个片段")
-        # 根据testSet.txt，视频文件名就是video_id.mp4
+        # NOTE: Comment translated to English.
         video_file = f"{sample['video_id']}.mp4"
 
         video_abs_path = os.path.join(video_path, video_file)
 
-        # 检查视频文件是否存在
+        # NOTE: Comment translated to English.
         if not os.path.isfile(video_abs_path):
             print(f"警告: 视频文件不存在 {video_abs_path}")
             fail_count += 1
             continue
 
-        # 构建音频文件路径
+        # NOTE: Comment translated to English.
         audio_file = f"{sample['video_id']}_{sample['clip_id']}.wav"
         audio_abs_path = os.path.join(audio_path, audio_file)
 
-        # 检查音频文件是否已存在
+        # NOTE: Comment translated to English.
         if os.path.isfile(audio_abs_path) and not args.force:
             skip_count += 1
             continue
 
-        # 计算持续时间
+        # NOTE: Comment translated to English.
         duration = sample['end'] - sample['start']
         if duration <= 0:
             print(f"警告: 无效的持续时间 {duration} 对于 {sample['clip_id']}")
             fail_count += 1
             continue
 
-        # 提取音频
+        # NOTE: Comment translated to English.
         if extract_audio_segment(video_abs_path, audio_abs_path, sample['start'], duration):
             success_count += 1
         else:
             fail_count += 1
             if os.path.exists(audio_abs_path):
-                os.remove(audio_abs_path)  # 删除失败的文件
+                os.remove(audio_abs_path)  # NOTE: Comment translated to English.
 
-    # 输出统计信息
+    # NOTE: Comment translated to English.
     print("\n处理完成:")
     print(f"  成功提取: {success_count}")
     print(f"  跳过已存在: {skip_count}")

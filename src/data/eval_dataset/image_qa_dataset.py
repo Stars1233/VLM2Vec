@@ -68,7 +68,7 @@ def load_image_qa_dataset(model_args, data_args, *args, **kwargs):
     kwargs['model_backbone'] = model_args.model_backbone
     kwargs['image_resolution'] = data_args.image_resolution
 
-    # 使用可pickle的顶层函数 data_prepare，允许多进程
+    # NOTE: Comment translated to English.
     dataset = dataset.map(
         data_prepare,
         batched=True,

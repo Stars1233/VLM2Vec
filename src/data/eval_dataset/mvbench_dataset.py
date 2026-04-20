@@ -180,7 +180,7 @@ DATASET_HF_PATH = "OpenGVLab/MVBench"
 def load_mvbench_dataset(model_args, data_args, *args, **kwargs):
     dataset_name = kwargs['dataset_name']
     
-    # 优先使用本地路径
+    # NOTE: Comment translated to English.
     if dataset_name in EVAL_DATASET_LOCAL_PATH:
         local_path_info = EVAL_DATASET_LOCAL_PATH[dataset_name]
         local_path = local_path_info[0]

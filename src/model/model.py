@@ -249,7 +249,7 @@ class MMEBModel(nn.Module):
         # ===== QWEN2.5 OMNI / NVOMNI / WAVE =====
         elif backbone in {QWEN2_5_OMNI, NVOMNIEMBED, WAVE}:
             is_wave = backbone == WAVE
-            # 1) 过滤掉调试字段（模型不认识）
+            # 1) Drop debug-only fields that the model does not accept.
             EXTRA_KEYS = {"texts", "images", "audios"}
             raw_input = input
             model_input = {k: v for k, v in raw_input.items() if k not in EXTRA_KEYS}
@@ -257,7 +257,7 @@ class MMEBModel(nn.Module):
             # device follow model
             dev = self.device
 
-            # 2) 强制把 input_ids / attention_mask 转成 LongTensor (AND move to device)
+            # 2) Force input_ids / attention_mask to LongTensor and move to device.
             def _to_long_tensor(x, device=None):
                 if x is None:
                     return None
@@ -271,7 +271,7 @@ class MMEBModel(nn.Module):
                 if k in model_input:
                     model_input[k] = _to_long_tensor(model_input[k], device=dev)
 
-            # 3) 音频字段命名对齐
+            # 3) Align audio field names between processor and model.
             # processor: input_features, audio_attention_mask, audio_feature_lengths
             # model:     input_features, feature_attention_mask, audio_feature_lengths
             if "audio_attention_mask" in model_input and "feature_attention_mask" not in model_input:
@@ -280,11 +280,11 @@ class MMEBModel(nn.Module):
             if "audio_values" in model_input and "input_features" not in model_input:
                 model_input["input_features"] = model_input.pop("audio_values")
 
-            # 清理冗余键
+            # Remove redundant keys.
             for k in ("audio_values", "audio_features", "audios"):
                 model_input.pop(k, None)
 
-            # 4) 检测模态
+            # 4) Detect available modalities.
             def _has_nonempty(container, key: str) -> bool:
                 if key not in container or container[key] is None:
                     return False
@@ -441,7 +441,7 @@ class MMEBModel(nn.Module):
                 outputs = self.encoder(**forward_kwargs)
                 attn_mask = model_input.get("attention_mask", None)
             else:
-                # 纯文本：只走 text-only encoder
+                # Text-only path: use the text encoder only.
                 visual_keys = {
                     "pixel_values", "image_grid_thw",
                     "pixel_values_videos", "video_grid_thw", "second_per_grid_ts",
@@ -450,7 +450,7 @@ class MMEBModel(nn.Module):
                 }
                 text_only_input = {k: v for k, v in model_input.items() if k not in visual_keys}
 
-                # 防止 padding_side 不一致导致 flash_attn 对齐问题
+                # Avoid flash-attn alignment issues from inconsistent padding_side.
                 for m in [self.encoder, getattr(self.encoder, "model", None)]:
                     if m is None:
                         continue

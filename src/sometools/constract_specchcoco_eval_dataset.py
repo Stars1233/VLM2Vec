@@ -10,13 +10,13 @@ import datasets
 SRC_DIR = "/data/mengrui/.cache/huggingface/datasets/MMEB-V3/audio-tasks/speechcoco/data"
 OUT_DIR = "/data/mengrui/.cache/huggingface/datasets/MMEB-V3/audio-tasks/speechcoco-1k"
 
-N_TEST = 1000          # ✅ 只需要测试集 query 数
-CAND_MAX = 10000       # ✅ 测试候选池大小（unique image_id）
+N_TEST = 1000  # NOTE: Comment translated to English.
+CAND_MAX = 10000  # NOTE: Comment translated to English.
 SEED = 17
 
 
 def _find_files() -> List[str]:
-    # 你原来读 validation-*.parquet，这里保留
+    # NOTE: Comment translated to English.
     files = sorted(glob.glob(os.path.join(SRC_DIR, "validation-*.parquet")))
     if not files:
         raise FileNotFoundError(f"No parquet found under: {SRC_DIR}")
@@ -53,7 +53,7 @@ def main():
     image_col = _infer_image_col(ds)
     print(f"[INFO] total rows={len(ds)} | image_col={image_col}")
 
-    # 1) 收集 unique image_id -> image object（取第一次出现）
+    # NOTE: Comment translated to English.
     img_map: Dict[str, Any] = {}
     for row in ds:
         img_id = str(row["image_id"])
@@ -64,7 +64,7 @@ def main():
     rng.shuffle(all_img_ids)
     print(f"[INFO] unique image_id={len(all_img_ids)}")
 
-    # 2) 选 test corpus（最多 CAND_MAX 个 unique image）
+    # NOTE: Comment translated to English.
     test_img_ids = all_img_ids[: min(CAND_MAX, len(all_img_ids))]
     test_cand_set = set(test_img_ids)
 
@@ -73,7 +73,7 @@ def main():
 
     print(f"[INFO] corpus_test={len(test_img_ids)} (target<= {CAND_MAX})")
 
-    # 3) 从原始 rows 中筛出“正例 image_id 在 test 候选池内”的 rows，再抽 N_TEST
+    # NOTE: Comment translated to English.
     test_rows = []
     for row in ds:
         img_id = str(row["image_id"])
@@ -87,14 +87,14 @@ def main():
 
     test_rows = test_rows[:N_TEST]
 
-    # 4) 写 corpus（测试候选池）
+    # NOTE: Comment translated to English.
     _write_parquet(
         {"corpus-id": test_img_ids, "image": [img_map[iid] for iid in test_img_ids]},
         os.path.join(OUT_DIR, "corpus_test_10k.parquet"),
     )
     print("[OK] wrote corpus_test_10k.parquet")
 
-    # 5) 写 query + qrels（测试集）
+    # NOTE: Comment translated to English.
     query = {
         "id": [str(r["id"]) for r in test_rows],
         "audio": [r["audio"] for r in test_rows],

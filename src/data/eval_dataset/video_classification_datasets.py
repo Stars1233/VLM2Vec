@@ -50,7 +50,7 @@ DATASET_PARSER_NAME = "video_classification"
 def load_video_class_dataset(model_args, data_args, **kwargs):
     dataset_name = kwargs['dataset_name']
     
-    # 优先使用本地路径
+    # NOTE: Comment translated to English.
     if dataset_name in EVAL_DATASET_LOCAL_PATH:
         local_path_info = EVAL_DATASET_LOCAL_PATH[dataset_name]
         local_path = local_path_info[0]

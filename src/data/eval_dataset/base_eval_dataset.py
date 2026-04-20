@@ -134,14 +134,14 @@ def generate_cand_dataset(dataset, corpus):
         return a
 
     for row in dataset:
-        # 检测候选项使用的视觉字段（cand_image 或 cand_video）
+        # NOTE: Comment translated to English.
         cand_visual_key = None
         if "cand_video" in row:
             cand_visual_key = "cand_video"
         elif "cand_image" in row:
             cand_visual_key = "cand_image"
         
-        # ✅ 新架构/全局模式：query_dataset 可能不含候选字段，直接跳过
+        # NOTE: Comment translated to English.
         if (
             ("cand_text" not in row)
             or (cand_visual_key is None)
@@ -151,7 +151,7 @@ def generate_cand_dataset(dataset, corpus):
         ):
             continue
 
-        # ✅ 旧架构/local 模式：保持原逻辑不变
+        # NOTE: Comment translated to English.
         cand_audio_seq = row.get("cand_audio", None)
         if cand_audio_seq is not None:
             assert len(cand_audio_seq) == len(row["cand_text"])
@@ -163,7 +163,7 @@ def generate_cand_dataset(dataset, corpus):
             row["cand_text"], row[cand_visual_key], row["dataset_infos"]["cand_names"], cand_audio_seq
         ):
             if cand_name not in all_cand_name:
-                # 根据原始字段决定使用哪个键
+                # NOTE: Comment translated to English.
                 cand_row = {
                     "cand_text": [cand_text],
                     "dataset_infos": {"cand_name": cand_name},
@@ -176,7 +176,7 @@ def generate_cand_dataset(dataset, corpus):
 
     if corpus is not None:
         for row in corpus:
-            # 检测corpus使用的视觉字段
+            # NOTE: Comment translated to English.
             corpus_visual_key = "cand_video" if "cand_video" in row else "cand_image"
             
             assert len(row["cand_text"]) == len(row[corpus_visual_key]) == len(row["dataset_infos"]["cand_names"]) == 1

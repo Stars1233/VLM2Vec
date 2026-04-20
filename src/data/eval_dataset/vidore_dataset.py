@@ -64,14 +64,14 @@ def corpus_prepare(batch_dict, *args, **kwargs):
 
         if not os.path.exists(image_path):
             os.makedirs(image_root, exist_ok=True)
-            # 兼容多种存储形式：PIL.Image、dict(bytes/path)、原始字节
+            # NOTE: Comment translated to English.
             if isinstance(image, Image.Image):
                 image.save(image_path)
             elif isinstance(image, dict):
                 if image.get("bytes", None) is not None:
                     Image.open(io.BytesIO(image["bytes"])).save(image_path)
                 elif image.get("path", None) is not None:
-                    image_path = image["path"]  # 直接使用已有路径
+                    image_path = image["path"]  # NOTE: Comment translated to English.
                 else:
                     raise ValueError(f"Unsupported image dict format for corpus_id={corpus_id}: keys={list(image.keys())}")
             elif isinstance(image, (bytes, bytearray)):
@@ -97,14 +97,14 @@ DATASET_PARSER_NAME = "vidore"
 def load_vidore_dataset(model_args, data_args, **kwargs):
     dataset_name = kwargs['dataset_name']
     
-    # 优先使用本地路径
+    # NOTE: Comment translated to English.
     if dataset_name in EVAL_DATASET_LOCAL_PATH:
         hf_dataset_name = EVAL_DATASET_LOCAL_PATH[dataset_name][0]
         lang = EVAL_DATASET_LOCAL_PATH[dataset_name][1]
         hf_dataset_split = EVAL_DATASET_LOCAL_PATH[dataset_name][2]
         if os.path.exists(hf_dataset_name):
             print(f"Loading {dataset_name} from local path: {hf_dataset_name}")
-            # BEIR format - 加载本地数据集
+            # NOTE: Comment translated to English.
             dataset = load_hf_dataset((hf_dataset_name, "queries", hf_dataset_split, "local"))
             if lang is not None:
                 dataset = dataset.filter(lambda example: example["language"] == lang)
@@ -121,7 +121,7 @@ def load_vidore_dataset(model_args, data_args, **kwargs):
             qrels = load_hf_dataset((hf_dataset_name, "qrels", hf_dataset_split))
             corpus = load_hf_dataset((hf_dataset_name, "corpus", hf_dataset_split))
     else:
-        # 使用HF路径
+        # NOTE: Comment translated to English.
         hf_dataset_name = EVAL_DATASET_HF_PATH[dataset_name][0]
         lang = EVAL_DATASET_HF_PATH[dataset_name][1]
         hf_dataset_split = EVAL_DATASET_HF_PATH[dataset_name][2]

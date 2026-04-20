@@ -23,7 +23,7 @@ class OmniEmbedForConditionalGeneration(torch.nn.Module):
         self.base_model = base_model
         self.config = base_model.config
 
-        # 打印 base_model 的 padding_side 和 config.padding_side（执行前）
+        # Print base_model padding_side and config.padding_side (before).
         print(f"Base model padding_side (before): {getattr(self.base_model, 'padding_side', 'Not set')}")
         print(f"Base model config.padding_side (before): {getattr(getattr(self.base_model, 'config', None), 'padding_side', 'Not set')}")
 
@@ -38,7 +38,7 @@ class OmniEmbedForConditionalGeneration(torch.nn.Module):
         self._force_left_padding(self.base_model)
         self._force_left_padding(getattr(self.base_model, "model", None))
 
-        # 打印 base_model 的 padding_side 和 config.padding_side（执行后）
+        # Print base_model padding_side and config.padding_side (after).
         print(f"Base model padding_side (after): {getattr(self.base_model, 'padding_side', 'Not set')}")
         print(f"Base model config.padding_side (after): {getattr(getattr(self.base_model, 'config', None), 'padding_side', 'Not set')}")
         if hasattr(self.base_model, 'model'):
@@ -354,7 +354,7 @@ class OmniEmbedForConditionalGeneration(torch.nn.Module):
         has_audio = (input_features is not None)
         has_text = (input_ids is not None)
         
-        # ✅ 支持纯文本：只要有 input_ids 就可以，视觉和音频是可选的
+        # Text-only is supported: input_ids are required, visual/audio are optional.
         if not has_text:
             raise ValueError(
                 f"OmniEmbed.forward: input_ids (text) must be provided.\n"
@@ -366,7 +366,7 @@ class OmniEmbedForConditionalGeneration(torch.nn.Module):
         def _is_all_zero(x) -> bool:
             return isinstance(x, torch.Tensor) and x.numel() > 0 and x.abs().max().item() == 0
 
-        # 只有当模态存在时才检查全0（避免在纯文本场景报错）
+        # Check for all-zero tensors only when that modality is present.
         if has_visual and _is_all_zero(pixel_values):
             raise ValueError("[OmniEmbed.forward] pixel_values is ALL-ZERO. Image loading/processor likely failed.")
         if has_visual and _is_all_zero(pixel_values_videos):
