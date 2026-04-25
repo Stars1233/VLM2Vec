@@ -1,5 +1,9 @@
-# VLM2Vec-V2: Unified Multimodal Embedding for Videos, Images, and Documents
+# MMEB-V3: Measuring the Performance Gaps of Omni-Modality Embedding Models
 
+<a target="_blank" href="https://github.com/TIGER-AI-Lab/VLM2Vec/tree/olm2vec">
+<img style="height:22pt" src="https://img.shields.io/badge/-MMEB--V3%20Code-green?style=flat&logo=github"></a>
+<a target="_blank" href="https://huggingface.co/datasets/VLM2Vec/MMEB-V3">
+<img style="height:22pt" src="https://img.shields.io/badge/-🤗%20Dataset(MMEB--V3)-red?style=flat"></a>
 <a target="_blank" href="https://arxiv.org/abs/2507.04590">
 <img style="height:22pt" src="https://img.shields.io/badge/-V2 Paper%20-black?style=flat&logo=arxiv"></a>
 <a target="_blank" href="https://arxiv.org/abs/2410.05160">
@@ -20,6 +24,28 @@
 <img style="height:22pt" src="https://img.shields.io/badge/-Tweet-blue?style=flat&logo=twitter"></a>
 <br>
 
+This branch contains the code and data interface for **MMEB-V3**, a comprehensive benchmark for evaluating **omni-modality embedding models** across text, image, video, audio, visual document, and agent-centric retrieval scenarios.
+
+MMEB-V3 extends MMEB-V2 toward a fuller modality setting by adding **111 new tasks**, resulting in **190 tasks** in total. It introduces three major new evaluation categories:
+
+- **Audio Tasks**: audio classification, cross-modal audio retrieval, and audio temporal grounding.
+
+- **Complex Text Retrieval**: instruction-following retrieval, reasoning retrieval, long-context retrieval, multi-condition retrieval, and general text retrieval.
+
+- **Agent Tasks**: tool retrieval, GUI control, and agent memory retrieval.
+
+In addition, MMEB-V3 introduces **OmniSET** (*Omni-modality Semantic Equivalence Tuples*), a diagnostic component that groups semantically equivalent instances across text, image, video, and audio. OmniSET is designed for controlled analysis of modality effects and instruction-conditioned cross-modal retrieval behavior.
+
+MMEB-V3 aims to diagnose whether current embedding models can reliably follow modality-specific instructions, such as retrieving an image, video, audio clip, document, tool, GUI element, or memory item under explicit task constraints.
+
+- **MMEB-V3 Dataset**: https://huggingface.co/datasets/VLM2Vec/MMEB-V3
+
+- **Code Branch**: https://github.com/TIGER-AI-Lab/VLM2Vec/tree/olm2vec
+
+---
+
+
+# VLM2Vec-V2: Unified Multimodal Embedding for Videos, Images, and Documents
 
 This repository contains the official code and data for **VLM2Vec-V2**, a unified framework for learning powerful multimodal embeddings across diverse visual formats including images, videos, and visual documents.
 
@@ -45,6 +71,7 @@ This is an open-source project, and we welcome contributions from the community.
 ---
 
 ## 🔥 News
+- **[2026-04] MMEB-V3 is released!** We introduce a comprehensive omni-modality embedding benchmark covering **text, image, video, audio, visual document, and agent-centric tasks**, with **190 tasks** in total. The dataset is available at [VLM2Vec/MMEB-V3](https://huggingface.co/datasets/VLM2Vec/MMEB-V3).
 - **[2025-05] VLM2Vec-v2 is released!** We introduce a unified embedding framework for **images, videos, and visual documents**. Our new **MMEB-V2 benchmark**, featuring 78 diverse tasks, is also available. The VLM2Vec-V2 model outperforms previous versions and strong specialized baselines.
 - **[2025-01] 🎉 VLM2Vec is accepted to ICLR 2025.**
 - **[2024-10]** The technical report, code, data, and model for VLM2Vec are all available online.
