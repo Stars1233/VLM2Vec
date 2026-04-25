@@ -30,7 +30,7 @@ MMEB-V3 extends MMEB-V2 toward a fuller modality setting by adding **111 new tas
 
 - **Audio Tasks**: audio classification, cross-modal audio retrieval, and audio temporal grounding.
 
-- **Complex Text Retrieval**: instruction-following retrieval, reasoning retrieval, long-context retrieval, multi-condition retrieval, and general text retrieval.
+- **Text Retrieval**: instruction-following retrieval, reasoning retrieval, long-context retrieval, multi-condition retrieval, and general text retrieval.
 
 - **Agent Tasks**: tool retrieval, GUI control, and agent memory retrieval.
 
