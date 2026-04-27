@@ -1,7 +1,7 @@
 # (repo, subset, split)
 import os
 
-BASE_RAW_DATA_DIR = "/data/mengrui/.cache/huggingface/datasets/MMEB-V3"
+BASE_RAW_DATA_DIR = ".........."
 
 EVAL_DATASET_HF_PATH = {
     # Video-RET
