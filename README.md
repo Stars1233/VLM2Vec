@@ -4,8 +4,10 @@
 <img style="height:22pt" src="https://img.shields.io/badge/-MMEB--V3%20Code-green?style=flat&logo=github"></a>
 <a target="_blank" href="https://huggingface.co/datasets/VLM2Vec/MMEB-V3">
 <img style="height:22pt" src="https://img.shields.io/badge/-🤗%20Dataset(MMEB--V3)-red?style=flat"></a>
+<a target="_blank" href="https://arxiv.org/abs/2604.23321">
+<img style="height:22pt" src="https://img.shields.io/badge/-V3 Paper-black?style=flat&logo=arxiv"></a>
 <a target="_blank" href="https://arxiv.org/abs/2507.04590">
-<img style="height:22pt" src="https://img.shields.io/badge/-V2 Paper%20-black?style=flat&logo=arxiv"></a>
+<img style="height:22pt" src="https://img.shields.io/badge/-V2 Paper-black?style=flat&logo=arxiv"></a>
 <a target="_blank" href="https://arxiv.org/abs/2410.05160">
 <img style="height:22pt" src="https://img.shields.io/badge/-V1 Paper-black?style=flat&logo=arxiv"></a>
 <a target="_blank" href="https://github.com/TIGER-AI-Lab/VLM2Vec">
