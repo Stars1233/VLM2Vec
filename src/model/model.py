@@ -729,6 +729,7 @@ class MMEBModel(nn.Module):
                 torch_dtype=torch.bfloat16,
                 low_cpu_mem_usage=True,
                 config=config,
+                trust_remote_code=True,
                             )
         elif model_args.model_backbone == PHI3V:
             config = AutoConfig.from_pretrained(model_args.model_name, trust_remote_code=True)

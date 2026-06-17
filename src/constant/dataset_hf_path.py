@@ -1,3 +1,6 @@
+import os
+from src.constant.dataset_hflocal_path import BASE_RAW_DATA_DIR
+
 # (repo, subset, split)
 EVAL_DATASET_HF_PATH = {
     # Video-RET
