@@ -6,7 +6,11 @@ import requests
 import torchvision
 from PIL import Image
 from torchvision.datasets.folder import IMG_EXTENSIONS, pil_loader
-from torchvision.io import write_video
+try:
+    from torchvision.io import write_video
+except ImportError:  # torchvision >=0.26 removed video IO; not needed for text/image eval
+    def write_video(*args, **kwargs):
+        raise RuntimeError("torchvision.io.write_video is unavailable in this torchvision version")
 from . import video_transforms
 
 VID_EXTENSIONS = (".mp4", ".avi", ".mov", ".mkv")
