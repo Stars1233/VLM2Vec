@@ -36,7 +36,7 @@ class ModelArguments:
     lora_r: int = field(default=16, metadata={"help": "lora r"})
     lora_alpha: int = field(default=64, metadata={"help": "lora alpha"})
     lora_dropout: float = field(default=0.1, metadata={"help": "lora dropout"})
-    lora_target_modules: str = field(default="qkv_proj,o_proj,gate_up_proj,down_proj,k_proj,q_proj,out_proj,v_proj", metadata={"help": "lora target modules"})
+    lora_target_modules: str = field(default="qkv_proj,o_proj,gate_up_proj,down_proj,k_proj,q_proj,out_proj,v_proj,gate_proj,up_proj", metadata={"help": "lora target modules"})
     full_finetune: bool = field(default=False, metadata={"help": "train all parameters (disable embedding-only freezing)"})
     num_crops: int = field(default=16, metadata={"help": "number of crops used in image encoder"})
     uigraph_use: bool = field(default=False, metadata={"help": "Enable ui graph for token selection"})
@@ -100,7 +100,8 @@ class TrainingArguments(HFTrainingArguments):
     gc_q_chunk_size: int = field(default=2, metadata={"help": "query side subset size"})
     gc_p_chunk_size: int = field(default=2, metadata={"help": "target side subset size"})
     interleave_stopping_strategy: str = field(default="all_exhausted", metadata={"help": "all_exhausted or first_exhausted"})
-    interleave_batch_size: float = field(default=0, metadata={"help": "Specify mini-batch size to interleave data from multi-sources, 0/None means random sampling by examples, 1 means full batch."})
+    homogeneous_batch_size_per_device: float = field(default=0, metadata={"help": "Specify number of consecutive samples from the same dataset PER DEVICE. 0/None means random mixing."})
+    interleave_batch_size: float = field(default=0, metadata={"help": "[DEPRECATED] Use `homogeneous_batch_size_per_device`."})
     export_full_checkpoint: int = field(default=0, metadata={"help": "Export full HF dir at a specific checkpoint step; 0 disables."})
     loss_stage: str = field(default="infonce", metadata={"help": "Training loss stage: infonce | jepa | mixed"})
     loss_alpha: float = field(default=0.5, metadata={"help": "Alpha for mixed loss: alpha*jepa + (1-alpha)*infonce"})
@@ -122,6 +123,7 @@ class TrainingArguments(HFTrainingArguments):
             self.device = super().device
         except Exception:
             pass
+
 
 @dataclass
 class MTEBArguments:

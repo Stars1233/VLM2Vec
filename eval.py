@@ -23,7 +23,7 @@ from datasets.distributed import split_dataset_by_node
 from src.arguments import ModelArguments, DataArguments, TrainingArguments
 from src.data.collator.eval_collator import MultimodalEvalDataCollator
 from src.data.eval_dataset.base_eval_dataset import AutoEvalPairDataset, generate_cand_dataset
-from src.utils.eval_utils import RankingMetrics
+from src.utils.eval_utils.metrics import RankingMetrics
 from src.model.model import MMEBModel
 from src.model.processor import get_backbone_name, load_processor, COLPALI, QWEN3_VL, QWEN2_5_OMNI, NVOMNIEMBED, WAVE, E5_OMNI, JINA_OMNI, LCO_OMNI
 from src.utils.basic_utils import batch_to_device, print_rank, print_master
@@ -459,10 +459,14 @@ def main():
         do_cand = False
 
         try:
-            # 0. load dataset
             if dist.is_initialized():
                 dist.barrier(device_ids=[local_rank])
             print_master(f"--- Evaluating {dataset_name} ---")
+
+            current_batch_size = training_args.per_device_eval_batch_size
+            if dataset_name in ["Charades-STA", "QVHighlight", "MomentSeeker", "YouCook2", "Video-MME"]:
+                current_batch_size = min(current_batch_size, 4)
+                print_master(f"Reduced batch size to {current_batch_size} for {dataset_name}")
 
             query_embed_path = os.path.join(data_args.encode_output_path, f"{dataset_name}_qry")
             cand_embed_path = os.path.join(data_args.encode_output_path, f"{dataset_name}_tgt")
@@ -514,7 +518,7 @@ def main():
                 query_start_ts = time.time()
                 print_master("Encoding queries...")
                 eval_qry_collator = MultimodalEvalDataCollator(processor, model_args, data_args, "qry")
-                eval_qry_loader = DataLoader(eval_qry_dataset, batch_size=training_args.per_device_eval_batch_size, collate_fn=eval_qry_collator, num_workers=training_args.dataloader_num_workers)
+                eval_qry_loader = DataLoader(eval_qry_dataset, batch_size=current_batch_size, collate_fn=eval_qry_collator, num_workers=training_args.dataloader_num_workers)
                 query_embeds, gt_infos = encode_embeddings(model, eval_qry_loader, training_args, model_args, padded_qry_dataset, encode_side="qry", description=f"Queries for {dataset_name}")
                 query_embeds = query_embeds[:len(full_eval_qry_dataset)]  # world_size>1, trim the padded data points
                 gt_infos = gt_infos[:len(full_eval_qry_dataset)]
@@ -537,7 +541,7 @@ def main():
                 cand_start_ts = time.time()
                 print_master("Encoding candidates...")
                 eval_cand_collator = MultimodalEvalDataCollator(processor, model_args, data_args, "cand")
-                eval_cand_loader = DataLoader(eval_cand_dataset, batch_size=training_args.per_device_eval_batch_size, collate_fn=eval_cand_collator, num_workers=training_args.dataloader_num_workers)
+                eval_cand_loader = DataLoader(eval_cand_dataset, batch_size=current_batch_size, collate_fn=eval_cand_collator, num_workers=training_args.dataloader_num_workers)
 
                 cand_embeds, all_cand_ids = encode_embeddings(model, eval_cand_loader, training_args, model_args, padded_cand_dataset, encode_side="cand", description=f"Candidates for {dataset_name}")
                 cand_embeds = cand_embeds[:len(full_eval_cand_dataset)]  # world_size>1, trim the padded data points

@@ -59,10 +59,16 @@ def init_mixed_dataset(dataset_config, model_args, data_args, training_args):
         )
         train_datasets.append(train_dataset)
 
-    if training_args.interleave_batch_size and training_args.interleave_batch_size <= 1.0:
-        interleave_batch_size = training_args.per_device_train_batch_size * world_size * training_args.interleave_batch_size
+    # Handle Deprecation
+    if training_args.homogeneous_batch_size_per_device == 0 and training_args.interleave_batch_size != 0:
+        print_master("WARNING: `interleave_batch_size` is deprecated. Please use `homogeneous_batch_size_per_device`.")
+        training_args.homogeneous_batch_size_per_device = training_args.interleave_batch_size
+
+    if training_args.homogeneous_batch_size_per_device and training_args.homogeneous_batch_size_per_device <= 1.0:
+        interleave_batch_size = training_args.per_device_train_batch_size * world_size * training_args.homogeneous_batch_size_per_device
     else:
-        interleave_batch_size = training_args.interleave_batch_size
+        interleave_batch_size = training_args.homogeneous_batch_size_per_device * world_size
+
     dataset_num_rows = [_safe_num_rows(d) for d in train_datasets]
     total_num_rows = (
         sum(dataset_num_rows)
@@ -80,7 +86,8 @@ def init_mixed_dataset(dataset_config, model_args, data_args, training_args):
                  f"\n\t\ttotal num rows={total_num_rows_msg}"
                  f"\n\t\tglobal batch size={training_args.per_device_train_batch_size * world_size}"
                  f"\n\t\testimated num step per epoch={estimated_steps}"
-                 f"\n\t\tinterleave_batch_size={interleave_batch_size}"
+                 f"\n\t\thomogeneous_batch_size_per_device={training_args.homogeneous_batch_size_per_device}"
+                 f"\n\t\tinterleave_batch_size (global)={interleave_batch_size}"
                  )
     if total_num_rows is not None:
         assert total_num_rows >= (training_args.per_device_train_batch_size * world_size), \

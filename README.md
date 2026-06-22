@@ -201,7 +201,8 @@ This is an open-source project, and we welcome contributions from the community.
 
 ## 🔥 News
 - **[2026-04] MMEB-V3 is released!** We introduce a comprehensive omni-modality embedding benchmark covering **text, image, video, audio, visual document, and agent-centric tasks**, with **190 tasks** in total. The dataset is available at [VLM2Vec/MMEB-V3](https://huggingface.co/datasets/VLM2Vec/MMEB-V3).
-- **[2025-05] VLM2Vec-v2 is released!** We introduce a unified embedding framework for **images, videos, and visual documents**. Our new **MMEB-V2 benchmark**, featuring 78 diverse tasks, is also available. The VLM2Vec-V2 model outperforms previous versions and strong specialized baselines.
+- **[2026-01] 🎉 VLM2Vec-V2 is accepted to TMLR 2026.**
+- **[2025-05]** VLM2Vec-v2 is released! We introduce a unified embedding framework for images, videos, and visual documents. Our new MMEB-V2 benchmark, featuring 78 diverse tasks, is also available. The VLM2Vec-V2 model outperforms previous versions and strong specialized baselines.
 - **[2025-01] 🎉 VLM2Vec is accepted to ICLR 2025.**
 - **[2024-10]** The technical report, code, data, and model for VLM2Vec are all available online.
 
