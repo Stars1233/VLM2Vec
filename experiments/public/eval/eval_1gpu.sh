@@ -18,8 +18,9 @@ BATCH_SIZE=8
 # BATCH_SIZE=8
 # MODALITIES=("image" "video" "tool" "visdoc" "audio" "text")
 MODALITIES=("gui")
-DATA_BASEDIR=/data/mengrui/.cache/huggingface/datasets/MMEB-V3
+DATA_BASEDIR="${DATA_BASEDIR:-data/MMEB-V3}"
 OUTPUT_BASEDIR=exps/vlm2vec
+MODEL_CACHE_DIR="${MODEL_CACHE_DIR:-$HOME/.cache/huggingface}"
 # WAVE-only optional args (only effective when MODEL_BACKBONE=wave)
 WAVE_PROCESSOR_PATH="${WAVE_PROCESSOR_PATH:-}"
 WAVE_TRAIN_CLASSIFY="${WAVE_TRAIN_CLASSIFY:-true}"
@@ -94,10 +95,10 @@ declare -a MODEL_SPECS
 # MODEL_SPECS+=( "/code/.cache/huggingface/Qwen2-VL-2B;qwen2_vl;$OUTPUT_BASEDIR/VLM2Vec-V2.0-Qwen2VL-2B;/code/.cache/huggingface/VLM2Vec-V2.0" )
 # MODEL_SPECS+=( "/code/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/VLM2Vec-V3.0-Qwen2_5omni-3B;/code/OLM2VEC_and_MMEB-V3/VLM2Vec1/VLM2Vec/exps/output_model/Qwen2_5Omni_3B.audio.lora16.BS512.IB64.GCq8p8.NormTemp002.lr5e5.step5kwarm100/checkpoint-2850" )
 
-MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/omni-embed-nemotron-3b;nvomniembed;$OUTPUT_BASEDIR/omni-embed-nemotron-3b" )
+MODEL_SPECS+=( "$MODEL_CACHE_DIR/omni-embed-nemotron-3b;nvomniembed;$OUTPUT_BASEDIR/omni-embed-nemotron-3b" )
 # Ours example (only edit MODEL_SPECS when switching models):
-# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours;/abs/path/checkpoint-7000;processor_name=/data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B;lora=true" )
-# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/WAVE-7B;wave;$OUTPUT_BASEDIR/WAVE-7B" )
+# MODEL_SPECS+=( "$MODEL_CACHE_DIR/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours;/abs/path/checkpoint-7000;processor_name=$MODEL_CACHE_DIR/Qwen2.5-Omni-3B;lora=true" )
+# MODEL_SPECS+=( "$MODEL_CACHE_DIR/WAVE-7B;wave;$OUTPUT_BASEDIR/WAVE-7B" )
 # MODEL_SPECS+=( "Alibaba-NLP/gme-Qwen2-VL-2B-Instruct;gme;$OUTPUT_BASEDIR/gme-Qwen2-VL-2B-Instruct" )
 # MODEL_SPECS+=( "Alibaba-NLP/gme-Qwen2-VL-7B-Instruct;gme;$OUTPUT_BASEDIR/gme-Qwen2-VL-7B-Instruct" )
 # MODEL_SPECS+=( "code-kunkun/LamRA-Ret;lamra;$OUTPUT_BASEDIR/LamRA-Ret" )

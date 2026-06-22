@@ -19,8 +19,9 @@ BATCH_SIZE=8
 DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-1}"
 # MODALITIES=("image" "video" "tool" "visdoc" "text")
 MODALITIES=("image" "video" "visdoc")
-DATA_BASEDIR=/data/mengrui/.cache/huggingface/datasets/MMEB-V3
+DATA_BASEDIR="${DATA_BASEDIR:-data/MMEB-V3}"
 OUTPUT_BASEDIR=exps/vlm2vec
+MODEL_CACHE_DIR="${MODEL_CACHE_DIR:-$HOME/.cache/huggingface}"
 # WAVE-only optional args (only effective when MODEL_BACKBONE=wave)
 WAVE_PROCESSOR_PATH="${WAVE_PROCESSOR_PATH:-}"
 WAVE_TRAIN_CLASSIFY="${WAVE_TRAIN_CLASSIFY:-true}"
@@ -103,22 +104,22 @@ parse_model_spec() {
 # ==> Define models and their base output paths here
 # Format: "MODEL_NAME;MODEL_BACKBONE;BASE_OUTPUT_PATH[;CHECKPOINT_PATH]"
 declare -a MODEL_SPECS
-# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/omni-embed-nemotron-3b;nvomniembed;$OUTPUT_BASEDIR/omni-embed-nemotron-3b" )
+# MODEL_SPECS+=( "$MODEL_CACHE_DIR/omni-embed-nemotron-3b;nvomniembed;$OUTPUT_BASEDIR/omni-embed-nemotron-3b" )
 # Ours example (only edit MODEL_SPECS when switching models):
-MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours-EXP_02_01;/data/mengrui/.cache/huggingface/EXP_02_01;lora=true;pooling=mean;normalize=true" )
-MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours-EXP_02_02;/data/mengrui/.cache/huggingface/EXP_02_02;lora=true;pooling=mean;normalize=true" )
-MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours-EXP_02_04;/data/mengrui/.cache/huggingface/EXP_02_04;lora=true;pooling=mean;normalize=true" )
-# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours-EXP_02_04;/data/mengrui/.cache/huggingface/EXP_02_04;lora=true;pooling=mean;normalize=true" )
-# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours-EXP_02_02;/data/mengrui/.cache/huggingface/EXP_02_02/checkpoint-5000;lora=true;pooling=mean;normalize=true" )
-# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen3-VL-Embedding-8B;qwen3_vl;$OUTPUT_BASEDIR/Qwen3-VL-Embedding-8B" )
-# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen3-VL-Embedding-2B;qwen3_vl;$OUTPUT_BASEDIR/Qwen3-VL-Embedding-2B" )
-# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2-VL-2B-Instruct;qwen2_vl;$OUTPUT_BASEDIR/VLM2Vec-V2.0-Qwen2VL-2B;/data/mengrui/.cache/huggingface/VLM2Vec-V2.0;lora=true;pooling=last;normalize=true")
-# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2-VL-7B-Instruct;qwen2_vl;$OUTPUT_BASEDIR/VLM2Vec--Qwen2VL-7B;/data/mengrui/.cache/huggingface/VLM2Vec-Qwen2VL-7B;lora=true;pooling=last;normalize=true")
+MODEL_SPECS+=( "$MODEL_CACHE_DIR/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours-EXP_02_01;$MODEL_CACHE_DIR/EXP_02_01;lora=true;pooling=mean;normalize=true" )
+MODEL_SPECS+=( "$MODEL_CACHE_DIR/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours-EXP_02_02;$MODEL_CACHE_DIR/EXP_02_02;lora=true;pooling=mean;normalize=true" )
+MODEL_SPECS+=( "$MODEL_CACHE_DIR/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours-EXP_02_04;$MODEL_CACHE_DIR/EXP_02_04;lora=true;pooling=mean;normalize=true" )
+# MODEL_SPECS+=( "$MODEL_CACHE_DIR/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours-EXP_02_04;$MODEL_CACHE_DIR/EXP_02_04;lora=true;pooling=mean;normalize=true" )
+# MODEL_SPECS+=( "$MODEL_CACHE_DIR/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours-EXP_02_02;$MODEL_CACHE_DIR/EXP_02_02/checkpoint-5000;lora=true;pooling=mean;normalize=true" )
+# MODEL_SPECS+=( "$MODEL_CACHE_DIR/Qwen3-VL-Embedding-8B;qwen3_vl;$OUTPUT_BASEDIR/Qwen3-VL-Embedding-8B" )
+# MODEL_SPECS+=( "$MODEL_CACHE_DIR/Qwen3-VL-Embedding-2B;qwen3_vl;$OUTPUT_BASEDIR/Qwen3-VL-Embedding-2B" )
+# MODEL_SPECS+=( "$MODEL_CACHE_DIR/Qwen2-VL-2B-Instruct;qwen2_vl;$OUTPUT_BASEDIR/VLM2Vec-V2.0-Qwen2VL-2B;$MODEL_CACHE_DIR/VLM2Vec-V2.0;lora=true;pooling=last;normalize=true")
+# MODEL_SPECS+=( "$MODEL_CACHE_DIR/Qwen2-VL-7B-Instruct;qwen2_vl;$OUTPUT_BASEDIR/VLM2Vec--Qwen2VL-7B;$MODEL_CACHE_DIR/VLM2Vec-Qwen2VL-7B;lora=true;pooling=last;normalize=true")
 # MODEL_SPECS+=( "Alibaba-NLP/gme-Qwen2-VL-2B-Instruct;gme;$OUTPUT_BASEDIR/gme-Qwen2-VL-2B-Instruct" )
-# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/gme-Qwen2-VL-7B-Instruct;gme;$OUTPUT_BASEDIR/gme-Qwen2-VL-7B-Instruct" )
+# MODEL_SPECS+=( "$MODEL_CACHE_DIR/gme-Qwen2-VL-7B-Instruct;gme;$OUTPUT_BASEDIR/gme-Qwen2-VL-7B-Instruct" )
 # MODEL_SPECS+=( "code-kunkun/LamRA-Ret;lamra;$OUTPUT_BASEDIR/LamRA-Ret" )
-# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/WAVE-7B;wave;$OUTPUT_BASEDIR/WAVE-7B" )
-# MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/colpaligemma-3b-pt-448-base;colpali;$OUTPUT_BASEDIR/colpali-v1.3;/data/mengrui/.cache/huggingface/colpali-v1.3;lora=true" )
+# MODEL_SPECS+=( "$MODEL_CACHE_DIR/WAVE-7B;wave;$OUTPUT_BASEDIR/WAVE-7B" )
+# MODEL_SPECS+=( "$MODEL_CACHE_DIR/colpaligemma-3b-pt-448-base;colpali;$OUTPUT_BASEDIR/colpali-v1.3;$MODEL_CACHE_DIR/colpali-v1.3;lora=true" )
 #MODEL_SPECS+=( "royokong/e5-v;llava_next;$OUTPUT_BASEDIR/e5-v" )
 #MODEL_SPECS+=( "src/model/vlm_backbone/internvideo2/;internvideo2;$OUTPUT_BASEDIR/internvideo2" )
 #MODEL_SPECS+=( "code-kunkun/LamRA-Ret-Qwen2.5VL-7b;lamra-qwen25;$OUTPUT_BASEDIR/gme-Qwen2-VL-7B-Instruct" )  # not ready

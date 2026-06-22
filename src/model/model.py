@@ -18,7 +18,8 @@ from src.arguments import ModelArguments, TrainingArguments
 from src.model.processor import (
     LLAVA_NEXT, QWEN2_VL, PHI3V, get_backbone_name, print_master, QWEN2_5_VL,
     backbone2model, QWEN2_VL_TOKENSELECTION, QWEN2_5_VL_TOKENSELECTION, E5_V,
-    INTERNVIDEO2, GME, VLM_IMAGE_TOKENS, LamRA, LamRA_QWEN2_5, COLPALI, QWEN2_5_OMNI, NVOMNIEMBED, WAVE, QWEN3_VL
+    INTERNVIDEO2, GME, VLM_IMAGE_TOKENS, LamRA, LamRA_QWEN2_5, COLPALI, QWEN2_5_OMNI, NVOMNIEMBED, WAVE, QWEN3_VL,
+    E5_OMNI, JINA_OMNI, LCO_OMNI
 )
 from src.model.wave_official_utils import load_wave_official_model_classes
 try:
@@ -64,6 +65,31 @@ except Exception as exc:
 from transformers import modeling_utils
 if not hasattr(modeling_utils, "ALL_PARALLEL_STYLES") or modeling_utils.ALL_PARALLEL_STYLES is None:
     modeling_utils.ALL_PARALLEL_STYLES = ["tp", "none", "colwise", "rowwise"]
+
+
+def _patch_qwen_omni_flash_rotary_dtype():
+    """Patch Qwen2.5-Omni vision flash-attn rotary dtype mismatch."""
+    try:
+        from transformers.models.qwen2_5_omni import modeling_qwen2_5_omni as qwen_omni
+        from flash_attn.layers.rotary import apply_rotary_emb
+    except Exception:
+        return False
+
+    cls = getattr(qwen_omni, "Qwen2_5OmniVisionFlashAttention2", None)
+    if cls is None:
+        return False
+    if getattr(cls._apply_rotary_pos_emb_flashatt, "_vlm2vec_patched", False):
+        return True
+
+    def _apply_rotary_pos_emb_flashatt(self, tensor: torch.Tensor, freqs: torch.Tensor) -> torch.Tensor:
+        tensor_ = tensor.float()
+        cos = freqs.cos().to(tensor_.dtype)
+        sin = freqs.sin().to(tensor_.dtype)
+        return apply_rotary_emb(tensor_, cos, sin).type_as(tensor)
+
+    _apply_rotary_pos_emb_flashatt._vlm2vec_patched = True
+    cls._apply_rotary_pos_emb_flashatt = _apply_rotary_pos_emb_flashatt
+    return True
 
 
 def _require_peft():
@@ -154,6 +180,8 @@ class MMEBModel(nn.Module):
                 attention_mask = attention_mask.to(hidden_states.device).long()
 
         mode = getattr(self, "pooling", "last")  # string config
+        if mode in ("last_token", "eos"):
+            mode = "last"
 
         if mode == "eos":
             mode = "last"
@@ -246,8 +274,25 @@ class MMEBModel(nn.Module):
             attn_mask = input.get("attention_mask", None)
             return self._pooling(hidden_states, attn_mask)
 
-        # ===== QWEN2.5 OMNI / NVOMNI / WAVE =====
-        elif backbone in {QWEN2_5_OMNI, NVOMNIEMBED, WAVE}:
+        # ===== JINA_OMNI =====
+        elif backbone == JINA_OMNI:
+            extra_keys = {"texts", "images", "audios"}
+            model_input = {k: v for k, v in input.items() if k not in extra_keys}
+            dev = self.device
+            for k in ("input_ids", "attention_mask"):
+                if k in model_input and isinstance(model_input[k], torch.Tensor):
+                    model_input[k] = model_input[k].long().to(dev)
+            for k in ("pixel_values", "pixel_values_videos", "image_grid_thw", "video_grid_thw"):
+                if k in model_input and isinstance(model_input[k], torch.Tensor):
+                    model_input[k] = model_input[k].to(dev)
+            for k in ("input_features", "feature_attention_mask"):
+                if k in model_input and isinstance(model_input[k], torch.Tensor):
+                    model_input[k] = model_input[k].to(dev)
+            emb = self.encoder.embed(**model_input)
+            return F.normalize(emb, p=2, dim=-1) if getattr(self, "normalize", False) else emb
+
+        # ===== QWEN2.5 OMNI / NVOMNI / WAVE / E5_OMNI / LCO_OMNI =====
+        elif backbone in {QWEN2_5_OMNI, NVOMNIEMBED, WAVE, E5_OMNI, LCO_OMNI}:
             is_wave = backbone == WAVE
             # 1) Drop debug-only fields that the model does not accept.
             EXTRA_KEYS = {"texts", "images", "audios"}
@@ -438,7 +483,18 @@ class MMEBModel(nn.Module):
                 }
                 if is_wave:
                     forward_kwargs["pred_embeds"] = bool(getattr(self, "wave_pred_embeds", True))
-                outputs = self.encoder(**forward_kwargs)
+                if backbone == E5_OMNI:
+                    cache_position = torch.arange(0, model_input["input_ids"].shape[1], device=dev)
+                    prepared = self.encoder.base_model.prepare_inputs_for_generation(
+                        **model_input, use_cache=True, cache_position=cache_position,
+                    )
+                    outputs = self.encoder.base_model(
+                        **prepared,
+                        output_hidden_states=True,
+                        return_dict=True,
+                    )
+                else:
+                    outputs = self.encoder(**forward_kwargs)
                 attn_mask = model_input.get("attention_mask", None)
             else:
                 # Text-only path: use the text encoder only.
@@ -461,13 +517,24 @@ class MMEBModel(nn.Module):
 
                 # Keep text-only and multimodal paths aligned for omni backbones by
                 # using the full model forward (can expose `embeddings` consistently).
-                if backbone in {NVOMNIEMBED, QWEN2_5_OMNI}:
-                    outputs = self.encoder(
-                        **text_only_input,
-                        output_hidden_states=True,
-                        return_dict=True,
-                        use_cache=False,
-                    )
+                if backbone in {NVOMNIEMBED, QWEN2_5_OMNI, E5_OMNI, LCO_OMNI}:
+                    if backbone == E5_OMNI:
+                        cache_position = torch.arange(0, text_only_input["input_ids"].shape[1], device=dev)
+                        prepared = self.encoder.base_model.prepare_inputs_for_generation(
+                            **text_only_input, use_cache=True, cache_position=cache_position,
+                        )
+                        outputs = self.encoder.base_model(
+                            **prepared,
+                            output_hidden_states=True,
+                            return_dict=True,
+                        )
+                    else:
+                        outputs = self.encoder(
+                            **text_only_input,
+                            output_hidden_states=True,
+                            return_dict=True,
+                            use_cache=False,
+                        )
                 else:
                     outputs = self.encoder.model(
                         **text_only_input,
@@ -695,6 +762,22 @@ class MMEBModel(nn.Module):
                 low_cpu_mem_usage=True,
                 config=config,
                             )
+        elif model_args.model_backbone in {E5_OMNI, LCO_OMNI}:
+            import importlib.util
+            attn_impl = "flash_attention_2" if importlib.util.find_spec("flash_attn") is not None else "sdpa"
+            base_model = backbone2model[model_args.model_backbone].from_pretrained(
+                model_args.model_name,
+                torch_dtype=torch.bfloat16,
+                low_cpu_mem_usage=True,
+                attn_implementation=attn_impl,
+                            )
+            for module in [base_model, getattr(base_model, "model", None), getattr(base_model, "base_model", None)]:
+                if module is None:
+                    continue
+                if hasattr(module, "padding_side"):
+                    module.padding_side = "left"
+                if hasattr(module, "config") and hasattr(module.config, "padding_side"):
+                    module.config.padding_side = "left"
         elif model_args.model_backbone == QWEN3_VL:
             config = AutoConfig.from_pretrained(model_args.model_name, trust_remote_code=True)
             try:
@@ -719,18 +802,39 @@ class MMEBModel(nn.Module):
         elif model_args.model_backbone == NVOMNIEMBED:
             config = AutoConfig.from_pretrained(model_args.model_name, trust_remote_code=True)
             try:
-                config._attn_implementation = "flash_attention_2"
+                import importlib
+                _has_fa2 = importlib.util.find_spec("flash_attn") is not None
+                _attn_impl = "flash_attention_2" if _has_fa2 else "sdpa"
+                if _attn_impl == "flash_attention_2" and not _patch_qwen_omni_flash_rotary_dtype():
+                    _attn_impl = "sdpa"
+                config._attn_implementation = _attn_impl
                 if hasattr(config, "vision_config"):
-                    config.vision_config._attn_implementation = "flash_attention_2"
+                    config.vision_config._attn_implementation = _attn_impl
             except Exception as e:
-                print_master(f"Warning: Could not set flash_attention_2 for {model_args.model_backbone}: {e}")
+                print_master(f"Warning: Could not set attn_implementation for {model_args.model_backbone}: {e}")
             base_model = AutoModel.from_pretrained(
                 model_args.model_name,
                 torch_dtype=torch.bfloat16,
                 low_cpu_mem_usage=True,
                 config=config,
                 trust_remote_code=True,
-                            )
+            )
+        elif model_args.model_backbone == JINA_OMNI:
+            config = AutoConfig.from_pretrained(model_args.model_name, trust_remote_code=True)
+            try:
+                config._attn_implementation = "sdpa"
+                if hasattr(config, "vision_config"):
+                    config.vision_config._attn_implementation = "sdpa"
+            except Exception as e:
+                print_master(f"Warning: Could not set sdpa for {model_args.model_backbone}: {e}")
+            base_model = AutoModel.from_pretrained(
+                model_args.model_name,
+                torch_dtype=torch.bfloat16,
+                low_cpu_mem_usage=True,
+                config=config,
+                trust_remote_code=True,
+                default_task="retrieval",
+            )
         elif model_args.model_backbone == PHI3V:
             config = AutoConfig.from_pretrained(model_args.model_name, trust_remote_code=True)
             config.use_cache = False
@@ -787,7 +891,7 @@ class MMEBModel(nn.Module):
             # so LoRA must be attached to `base_model.base_model.model` (thinker.model),
             # not only to wrapper attribute `base_model.model`.
             if (
-                model_args.model_backbone == QWEN2_5_OMNI
+                model_args.model_backbone in {QWEN2_5_OMNI, E5_OMNI, LCO_OMNI}
                 and hasattr(base_model, "base_model")
                 and getattr(base_model.base_model, "model", None) is not None
             ):

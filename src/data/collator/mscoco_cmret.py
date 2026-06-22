@@ -10,18 +10,18 @@ from src.utils.vision_utils.vision_utils import save_frames, process_video_frame
 
 from typing import Literal
 
-def _enable_mscoco_rotary_dtype_patch():
-    flag = os.environ.get("MSCOCO_OMNI_ROTARY_DTYPE_PATCH", "0").lower()
+def _enable_omniset_rotary_dtype_patch():
+    flag = os.environ.get("OMNISET_ROTARY_DTYPE_PATCH", os.environ.get("MSCOCO_OMNI_ROTARY_DTYPE_PATCH", "0")).lower()
     if flag not in {"1", "true", "yes", "on"}:
         return
     try:
         from flash_attn.layers import rotary as layers_rotary
         from flash_attn.ops.triton import rotary as triton_rotary
     except Exception as e:
-        print_master(f"MSCOCO rotary dtype patch disabled (flash-attn import failed): {e}")
+        print_master(f"OmniSET rotary dtype patch disabled (flash-attn import failed): {e}")
         return
 
-    if getattr(triton_rotary, "_mscoco_dtype_patch_applied", False):
+    if getattr(triton_rotary, "_omniset_dtype_patch_applied", False):
         return
 
     original_apply_rotary = triton_rotary.apply_rotary
@@ -34,10 +34,10 @@ def _enable_mscoco_rotary_dtype_patch():
 
     triton_rotary.apply_rotary = _apply_rotary_with_dtype_fix
     layers_rotary.apply_rotary = _apply_rotary_with_dtype_fix
-    triton_rotary._mscoco_dtype_patch_applied = True
-    print_master("Enabled MSCOCO flash-attn rotary dtype compatibility patch.")
+    triton_rotary._omniset_dtype_patch_applied = True
+    print_master("Enabled OmniSET flash-attn rotary dtype compatibility patch.")
 
-_enable_mscoco_rotary_dtype_patch()
+_enable_omniset_rotary_dtype_patch()
 
 # ============== Cross Modality Utilities ==============
 MODALITIES = ['T', 'I', 'V', 'A']
@@ -275,9 +275,10 @@ def data_prepare(batch_dict, *args, **kwargs):
         "dataset_infos": dataset_infos
     }
 
-DATASET_PARSER_NAME = "mscoco_cmret"
-DATASET_HF_PATH = "MINGYISU/t2iv" # can still use t2iv, will rename the dataset in the future
-LOCAL_CMRET_JSONL = "mscoco_cmret.jsonl"
+DATASET_PARSER_NAME = "omniset"
+LEGACY_DATASET_PARSER_NAME = "mscoco_cmret"
+DATASET_HF_PATH = "MINGYISU/t2iv"  # legacy remote fallback
+LOCAL_CMRET_JSONL = "omniset.jsonl"
 LOCAL_CATALOG_JSONL = "catalog.jsonl"
 
 
@@ -294,7 +295,7 @@ def _load_caption_lookup(local_catalog_path):
     return id_to_caption
 
 
-def _resolve_local_mscoco_files(**kwargs):
+def _resolve_local_omniset_files(**kwargs):
     data_path = kwargs.get("data_path")
     candidate_roots = []
 
@@ -354,14 +355,15 @@ def _load_local_cmret_dataset(local_cmret_path, local_catalog_path):
     return dataset
 
 
+@AutoEvalPairDataset.register(LEGACY_DATASET_PARSER_NAME)
 @AutoEvalPairDataset.register(DATASET_PARSER_NAME)
-def load_mscoco_cmret_dataset(model_args, data_args, *args, **kwargs):
+def load_omniset_dataset(model_args, data_args, *args, **kwargs):
     dataset_name = kwargs["dataset_name"]
 
-    local_cmret_path, local_catalog_path = _resolve_local_mscoco_files(**kwargs)
+    local_cmret_path, local_catalog_path = _resolve_local_omniset_files(**kwargs)
     caption_lookup = {}
     if local_cmret_path is not None:
-        print_master(f"Loading local MSCOCO cmret file: {local_cmret_path}")
+        print_master(f"Loading local OmniSET file: {local_cmret_path}")
         if local_catalog_path:
             print_master(f"Using local catalog file: {local_catalog_path}")
         dataset = _load_local_cmret_dataset(local_cmret_path, local_catalog_path)
@@ -399,3 +401,7 @@ def load_mscoco_cmret_dataset(model_args, data_args, *args, **kwargs):
     dataset = dataset.select_columns(["query_text", "query_image", "query_video", "query_audio", "cand_text", "cand_image", "cand_video", "cand_audio", "dataset_infos"])
 
     return dataset, None
+
+
+# Backward-compatible import name for older code paths.
+load_mscoco_cmret_dataset = load_omniset_dataset

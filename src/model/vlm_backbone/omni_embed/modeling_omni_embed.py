@@ -48,12 +48,20 @@ class OmniEmbedForConditionalGeneration(torch.nn.Module):
     @classmethod
     def from_pretrained(cls, model_name_or_path, **kwargs):
         """Load the base model and wrap it."""
-        cfg = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
-        if getattr(cfg, "model_type", None) == "qwen2_5_omni":
+        try:
+            cfg = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
+        except (ValueError, KeyError):
+            from transformers.models.qwen2_5_omni import Qwen2_5OmniThinkerConfig
+            cfg = Qwen2_5OmniThinkerConfig.from_pretrained(model_name_or_path)
+        if getattr(cfg, "model_type", None) in ("qwen2_5_omni", "qwen2_5_omni_thinker"):
             from transformers.models.qwen2_5_omni import Qwen2_5OmniForConditionalGeneration
 
-            full_model = Qwen2_5OmniForConditionalGeneration.from_pretrained(model_name_or_path, **kwargs)
-            base_model = full_model.thinker if hasattr(full_model, "thinker") else full_model
+            if cfg.model_type == "qwen2_5_omni_thinker":
+                from transformers.models.qwen2_5_omni import Qwen2_5OmniThinkerForConditionalGeneration
+                base_model = Qwen2_5OmniThinkerForConditionalGeneration.from_pretrained(model_name_or_path, **kwargs)
+            else:
+                full_model = Qwen2_5OmniForConditionalGeneration.from_pretrained(model_name_or_path, **kwargs)
+                base_model = full_model.thinker if hasattr(full_model, "thinker") else full_model
         else:
             base_model = AutoModel.from_pretrained(model_name_or_path, **kwargs)
         return cls(base_model)

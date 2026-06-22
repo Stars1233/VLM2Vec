@@ -86,11 +86,18 @@ def main():
 
     with open(data_args.dataset_config, 'r') as yaml_file:
         dataset_config = yaml.safe_load(yaml_file)
-        if data_args.data_basedir:
-            for _, task_config in dataset_config.items():
-                image_dir = task_config.get('image_dir')
-                if image_dir and not os.path.isabs(image_dir):
-                    task_config['image_dir'] = os.path.join(data_args.data_basedir, image_dir)
+        data_basedir = os.path.expanduser(os.path.expandvars(data_args.data_basedir)) if data_args.data_basedir else None
+        path_keys = {"data_path", "image_dir", "frame_root", "audio_root", "video_root"}
+        for _, task_config in dataset_config.items():
+            if not isinstance(task_config, dict):
+                continue
+            for key in path_keys:
+                value = task_config.get(key)
+                if isinstance(value, str):
+                    value = os.path.expanduser(os.path.expandvars(value))
+                    if data_basedir and not os.path.isabs(value):
+                        value = os.path.join(data_basedir, value)
+                    task_config[key] = value
         train_dataset = init_mixed_dataset(dataset_config, model_args, data_args, training_args)
     train_collator = MultimodalDataCollator(processor, model_args, data_args, training_args)
 

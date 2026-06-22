@@ -25,7 +25,7 @@ from src.data.collator.eval_collator import MultimodalEvalDataCollator
 from src.data.eval_dataset.base_eval_dataset import AutoEvalPairDataset, generate_cand_dataset
 from src.utils.eval_utils import RankingMetrics
 from src.model.model import MMEBModel
-from src.model.processor import get_backbone_name, load_processor, COLPALI, QWEN3_VL, QWEN2_5_OMNI, NVOMNIEMBED, WAVE
+from src.model.processor import get_backbone_name, load_processor, COLPALI, QWEN3_VL, QWEN2_5_OMNI, NVOMNIEMBED, WAVE, E5_OMNI, JINA_OMNI, LCO_OMNI
 from src.utils.basic_utils import batch_to_device, print_rank, print_master
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s [%(name)s:%(lineno)s] %(message)s')
@@ -122,7 +122,7 @@ def encode_embeddings(
                     out_key = "tgt_reps"
                     gt_infos = [info["cand_name"] for info in dataset_info]
 
-                if model_args.model_backbone in {QWEN3_VL, QWEN2_5_OMNI, NVOMNIEMBED, WAVE}:
+                if model_args.model_backbone in {QWEN3_VL, QWEN2_5_OMNI, NVOMNIEMBED, WAVE, E5_OMNI, JINA_OMNI, LCO_OMNI}:
                     # Bucketed micro-batching by grid_thw to keep visual seq_len aligned.
                     batch_size = inputs["input_ids"].shape[0]
                     device = inputs["input_ids"].device

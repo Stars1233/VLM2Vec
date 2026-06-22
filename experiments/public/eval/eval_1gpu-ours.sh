@@ -18,8 +18,11 @@ BATCH_SIZE=16
 # BATCH_SIZE=16
 # MODALITIES=("image" "video" "tool" "visdoc" "audio" "text")
 MODALITIES=("audio" "image")
-DATA_BASEDIR=/data/mengrui/.cache/huggingface/datasets/MMEB-V3
+DATA_BASEDIR="${DATA_BASEDIR:-data/MMEB-V3}"
 OUTPUT_BASEDIR=exps/vlm2vec
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+MODEL_CACHE_DIR="${MODEL_CACHE_DIR:-$HOME/.cache/huggingface}"
 
 
 # ==> Define models and their base output paths here
@@ -29,7 +32,7 @@ declare -a MODEL_SPECS
 # MODEL_SPECS+=( "/code/.cache/huggingface/Qwen2-VL-2B;qwen2_vl;$OUTPUT_BASEDIR/VLM2Vec-V2.0-Qwen2VL-2B;/code/.cache/huggingface/VLM2Vec-V2.0" )
 # MODEL_SPECS+=( "/code/.cache/huggingface/omni-embed-nemotron-3b;nvomniembed;$OUTPUT_BASEDIR/omni-embed-nemotron-3b" )
 
-MODEL_SPECS+=( "/data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours;/data/mengrui/OLM2Vec/OLM2Vec/exps/output_model/Qwen2_5Omni_3B.audio.lora16.BS512.IB64.GCq8p8.NormTemp002.lr5e5.step5kwarm100/checkpoint-7000" )
+MODEL_SPECS+=( "$MODEL_CACHE_DIR/Qwen2.5-Omni-3B;qwen2_5_omni;$OUTPUT_BASEDIR/ours;$PROJECT_ROOT/exps/output_model/Qwen2_5Omni_3B.audio.lora16.BS512.IB64.GCq8p8.NormTemp002.lr5e5.step5kwarm100/checkpoint-7000" )
 # MODEL_SPECS+=( "Alibaba-NLP/gme-Qwen2-VL-2B-Instruct;gme;$OUTPUT_BASEDIR/gme-Qwen2-VL-2B-Instruct" )
 # MODEL_SPECS+=( "Alibaba-NLP/gme-Qwen2-VL-7B-Instruct;gme;$OUTPUT_BASEDIR/gme-Qwen2-VL-7B-Instruct" )
 # MODEL_SPECS+=( "code-kunkun/LamRA-Ret;lamra;$OUTPUT_BASEDIR/LamRA-Ret" )
@@ -67,7 +70,7 @@ for spec in "${MODEL_SPECS[@]}"; do
       --per_device_eval_batch_size $BATCH_SIZE \
       --model_backbone \"$MODEL_BACKBONE\" \
       --model_name \"$MODEL_NAME\" \
-      --processor_name /data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B \
+      --processor_name $MODEL_CACHE_DIR/Qwen2.5-Omni-3B \
       --dataset_config \"$DATA_CONFIG_PATH\" \
       --encode_output_path \"$OUTPUT_PATH\" \
       --data_basedir \"$DATA_BASEDIR\""

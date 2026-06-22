@@ -4,16 +4,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
-DATA_BASEDIR="${DATA_BASEDIR:-/data/mengrui/.cache/huggingface/datasets/MMEB-V3/mscoco-omni}"
-MODEL_PATH="${MODEL_PATH:-/data/mengrui/.cache/huggingface/omni-embed-nemotron-3b}"
-OUTPUT_PATH="${OUTPUT_PATH:-$PROJECT_ROOT/eval_cross_modality_outputs/mscoco_omni}"
+DATA_BASEDIR="${DATA_BASEDIR:-$PROJECT_ROOT/data/MMEB-V3/omniset}"
+MODEL_PATH="${MODEL_PATH:-}"
+OUTPUT_PATH="${OUTPUT_PATH:-$PROJECT_ROOT/eval_omniset_outputs/omniset}"
 # Keep empty-by-default here and resolve after backbone auto-detection.
 DATA_CONFIG_PATH="${DATA_CONFIG_PATH:-}"
 NO_AUDIO_DATA_CONFIG_PATH="${NO_AUDIO_DATA_CONFIG_PATH:-$PROJECT_ROOT/experiments/public/eval/cross_modality_no_audio.yaml}"
-MSCOCO_OMNI_ROTARY_DTYPE_PATCH="${MSCOCO_OMNI_ROTARY_DTYPE_PATCH:-1}"
+OMNISET_ROTARY_DTYPE_PATCH="${OMNISET_ROTARY_DTYPE_PATCH:-1}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 MASTER_PORT="${MASTER_PORT:-29613}"
 MODEL_BACKBONE="${MODEL_BACKBONE:-auto}"
+PER_DEVICE_EVAL_BATCH_SIZE="${PER_DEVICE_EVAL_BATCH_SIZE:-2}"
+DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-0}"
 # auto | true | false
 SKIP_AUDIO_TASKS="${SKIP_AUDIO_TASKS:-auto}"
 
@@ -25,6 +27,11 @@ WAVE_PRED_EMBEDS="${WAVE_PRED_EMBEDS:-true}"
 WAVE_USE_BEATS="${WAVE_USE_BEATS:-false}"
 WAVE_BEATS_PATH="${WAVE_BEATS_PATH:-}"
 WAVE_BEATS_ONLY="${WAVE_BEATS_ONLY:-false}"
+
+if [[ -z "$MODEL_PATH" ]]; then
+  echo "ERROR: MODEL_PATH is required. Example: MODEL_PATH=/path/to/omni-embed-nemotron-3b bash experiments/public/eval/eval_omniset.sh"
+  exit 1
+fi
 
 mkdir -p "$OUTPUT_PATH"
 cd "$PROJECT_ROOT"
@@ -70,11 +77,14 @@ echo "MODEL_PATH: $MODEL_PATH"
 echo "MODEL_BACKBONE: $EFFECTIVE_MODEL_BACKBONE"
 echo "SKIP_AUDIO_TASKS: $EFFECTIVE_SKIP_AUDIO_TASKS"
 echo "DATA_CONFIG_PATH: $DATA_CONFIG_PATH"
+echo "PER_DEVICE_EVAL_BATCH_SIZE: $PER_DEVICE_EVAL_BATCH_SIZE"
+echo "DATALOADER_NUM_WORKERS: $DATALOADER_NUM_WORKERS"
 
 EVAL_ARGS=(
   --pooling "mean"
   --normalize true
-  --per_device_eval_batch_size 16
+  --per_device_eval_batch_size "$PER_DEVICE_EVAL_BATCH_SIZE"
+  --dataloader_num_workers "$DATALOADER_NUM_WORKERS"
   --model_backbone "$EFFECTIVE_MODEL_BACKBONE"
   --model_name "$MODEL_PATH"
   --dataset_config "$DATA_CONFIG_PATH"
@@ -111,12 +121,12 @@ for gpu_id in "${GPU_IDS[@]}"; do
 done
 
 if [[ "$NUM_GPUS" -le 1 ]]; then
-  MSCOCO_OMNI_ROTARY_DTYPE_PATCH="$MSCOCO_OMNI_ROTARY_DTYPE_PATCH" \
+  OMNISET_ROTARY_DTYPE_PATCH="$OMNISET_ROTARY_DTYPE_PATCH" \
   CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES" python eval.py \
     "${EVAL_ARGS[@]}"
 else
   NPROC_PER_NODE="${NPROC_PER_NODE:-$NUM_GPUS}"
-  MSCOCO_OMNI_ROTARY_DTYPE_PATCH="$MSCOCO_OMNI_ROTARY_DTYPE_PATCH" \
+  OMNISET_ROTARY_DTYPE_PATCH="$OMNISET_ROTARY_DTYPE_PATCH" \
   CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES" torchrun \
     --nproc_per_node "$NPROC_PER_NODE" \
     --master_port "$MASTER_PORT" \

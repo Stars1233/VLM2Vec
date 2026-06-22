@@ -2,15 +2,16 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # Environment settings
 ENV_NAME="${ENV_NAME:-olm2vec}"
 CONDA_SH="${CONDA_SH:-${HOME}/miniconda3/etc/profile.d/conda.sh}"
 
 # Pipeline settings
-DATASET_ROOT="${DATASET_ROOT:-${HOME}/.cache/huggingface/datasets/MMEB-V3/mscoco-omni}"
-META_FILE="${META_FILE:-${DATASET_ROOT}/mscoco_cmret_all.jsonl}"
-CATALOG_FILE="${CATALOG_FILE:-${DATASET_ROOT}/catalog.jsonl}"
+DATASET_ROOT="${DATASET_ROOT:-${PROJECT_ROOT}/data/MMEB-V3/omniset}"
+META_FILE="${META_FILE:-omniset.jsonl}"
+CATALOG_FILE="${CATALOG_FILE:-catalog.jsonl}"
 MODEL_PATH="${MODEL_PATH:-${HOME}/.cache/huggingface/omni-embed-nemotron-3b}"
 MODEL_BACKBONE="${MODEL_BACKBONE:-nvomniembed}"
 MAX_SAMPLES="${MAX_SAMPLES:-0}"
@@ -44,9 +45,9 @@ Optional environment variables:
   ENV_NAME=olm2vec
   CONDA_SH=$HOME/miniconda3/etc/profile.d/conda.sh
 
-  DATASET_ROOT=$HOME/.cache/huggingface/datasets/MMEB-V3/mscoco-omni
-  META_FILE=$HOME/.cache/huggingface/datasets/MMEB-V3/mscoco-omni/mscoco_cmret_all.jsonl
-  CATALOG_FILE=$HOME/.cache/huggingface/datasets/MMEB-V3/mscoco-omni/catalog.jsonl
+  DATASET_ROOT=$PROJECT_ROOT/data/MMEB-V3/omniset
+  META_FILE=omniset.jsonl
+  CATALOG_FILE=catalog.jsonl
   MODEL_PATH=$HOME/.cache/huggingface/omni-embed-nemotron-3b
   MODEL_BACKBONE=nvomniembed
   MAX_SAMPLES=0

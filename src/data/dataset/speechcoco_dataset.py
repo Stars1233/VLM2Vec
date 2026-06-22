@@ -23,9 +23,8 @@ from src.utils.dataset_utils import sample_dataset
 
 
 POS_TEXT_IMAGE_INST = "Understand the content of the provided image."
-DEFAULT_DATA_PATH = (
-    "/data/mengrui/.cache/huggingface/datasets/MMEB-V3-train/audio-tasks-train/speechcoco"
-)
+DEFAULT_TRAIN_DATA_DIR = os.environ.get("MMEB_V3_TRAIN_DIR", os.path.join("data", "MMEB-V3-train"))
+DEFAULT_DATA_PATH = os.path.join(DEFAULT_TRAIN_DATA_DIR, "audio-tasks-train", "speechcoco")
 
 
 def _resolve_parquet_files(data_path: str, data_subdir: str, parquet_pattern: str) -> List[str]:

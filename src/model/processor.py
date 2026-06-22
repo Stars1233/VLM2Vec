@@ -415,6 +415,9 @@ LamRA = 'lamra'  # QWEN2-VL
 LamRA_QWEN2_5 = 'lamra_qwen25'  # QWEN2.5-VL
 COLPALI = 'colpali'  # PaliGemma-3B
 E5_V = 'e5_v'  # Llava_next
+E5_OMNI = 'e5_omni'  # Haon-Chen/e5-omni-7B (Qwen2.5-Omni-Thinker)
+JINA_OMNI = 'jina_omni'  # jinaai/jina-embeddings-v5-omni-small (Qwen3 custom)
+LCO_OMNI = 'lco_omni'  # LCO-Embedding/LCO-Embedding-Omni-7B (Qwen2.5-Omni-Thinker)
 MODEL2BACKBONE = {  # keys are from hf_config.model_type or manually added if not provided
     'phi3_v': PHI3V,
     'llava_next': LLAVA_NEXT,
@@ -434,6 +437,10 @@ MODEL2BACKBONE = {  # keys are from hf_config.model_type or manually added if no
     'lamra_qwen25': LamRA,
     'colpali': COLPALI,
     'e5_v': E5_V,
+    'e5_omni': E5_OMNI,
+    'jina_omni': JINA_OMNI,
+    'jina_embeddings_v5_omni': JINA_OMNI,
+    'lco_omni': LCO_OMNI,
 }
 SUPPORTED_MODELS = set(MODEL2BACKBONE.keys())
 
@@ -454,6 +461,9 @@ VLM_IMAGE_TOKENS = {
     INTERNVIDEO2: "",
     COLPALI: "",
     E5_V: "<image>",
+    E5_OMNI: "<|image_pad|>",
+    JINA_OMNI: "<|image_pad|>",
+    LCO_OMNI: "<|image_pad|>",
 }
 
 VLM_VIDEO_TOKENS = {
@@ -472,6 +482,9 @@ VLM_VIDEO_TOKENS = {
     INTERNVIDEO2: "",
     COLPALI: "",
     E5_V: "<image>",
+    E5_OMNI: "<|video_pad|>",
+    JINA_OMNI: "<|video_pad|>",
+    LCO_OMNI: "<|video_pad|>",
 }
 
 backbone2model = {
@@ -482,6 +495,8 @@ backbone2model = {
     QWEN2_VL_TOKENSELECTION: Qwen2VLTokenSelectionForConditionalGeneration,
     QWEN2_5_VL_TOKENSELECTION: Qwen2_5_VL_TokenSelectionForConditionalGeneration,
     QWEN2_5_OMNI: OmniEmbedForConditionalGeneration,
+    E5_OMNI: OmniEmbedForConditionalGeneration,
+    LCO_OMNI: OmniEmbedForConditionalGeneration,
     INTERNVIDEO2: InternVideo2_Stage2,
     E5_V: LlavaNextForConditionalGeneration,
 }
@@ -602,6 +617,32 @@ def load_processor(model_args, data_args=None):
         from transformers import AutoProcessor
         _install_qwen_omni_warning_filters()
         processor = AutoProcessor.from_pretrained(model_name_or_path, trust_remote_code=True)
+    elif model_args.model_backbone in (E5_OMNI, LCO_OMNI):
+        from transformers import AutoProcessor
+        _install_qwen_omni_warning_filters()
+        processor_path = model_args.processor_name if model_args.processor_name else model_name_or_path
+        proc_kwargs = {}
+        if data_args is not None and getattr(data_args, "resize_use_processor", True):
+            if getattr(data_args, "resize_max_pixels", None) is not None:
+                proc_kwargs["max_pixels"] = data_args.resize_max_pixels
+            if getattr(data_args, "resize_min_pixels", None) is not None:
+                proc_kwargs["min_pixels"] = data_args.resize_min_pixels
+        processor = AutoProcessor.from_pretrained(processor_path, trust_remote_code=True, **proc_kwargs)
+        for attr in ("image_processor", "video_processor"):
+            sub_processor = getattr(processor, attr, None)
+            if sub_processor is None:
+                continue
+            if proc_kwargs.get("max_pixels") is not None:
+                sub_processor.max_pixels = proc_kwargs["max_pixels"]
+            if proc_kwargs.get("min_pixels") is not None:
+                sub_processor.min_pixels = proc_kwargs["min_pixels"]
+        tok = getattr(processor, "tokenizer", None)
+        if tok is not None and hasattr(tok, "padding_side"):
+            tok.padding_side = "left"
+    elif model_args.model_backbone == JINA_OMNI:
+        from transformers import AutoProcessor
+        processor_path = model_args.processor_name if model_args.processor_name else model_name_or_path
+        processor = AutoProcessor.from_pretrained(processor_path, trust_remote_code=True)
     elif model_args.model_backbone == WAVE:
         _install_qwen_omni_warning_filters()
         processor_path = model_args.processor_name if model_args.processor_name else model_name_or_path
@@ -1849,7 +1890,8 @@ def NVOmni_process_fn(model_inputs: dict, processor, max_length=None):
         aud = _unwrap_single(a_i)
         img = _unwrap_single(i_i)
         vid = _normalize_video_value(v_i)
-        sig = (img is not None, vid is not None, aud is not None)
+        video_len = len(vid) if isinstance(vid, list) else None
+        sig = (img is not None, vid is not None, aud is not None, video_len)
         sample_records.append({
             "text": text,
             "audio": aud,
@@ -2033,6 +2075,23 @@ def process_input_text(instruction, model_backbone, text=None, add_video_token=F
             return instruction + " "
     elif model_backbone == E5_V:
         return PROMPT_TEMPLATE_DICT[model_backbone](text, add_video_token, add_image_token)
+    elif model_backbone in (E5_OMNI, JINA_OMNI):
+        prompt = instruction if instruction else ""
+        if text:
+            prompt = prompt + text
+        return prompt
+    elif model_backbone == LCO_OMNI:
+        if add_image_token:
+            suffix = "\nSummarize the above image in one word:"
+        elif add_video_token:
+            suffix = "\nSummarize the above video in one word:"
+        elif instruction and "audio" in instruction.lower():
+            suffix = "\nSummarize the above audio in one word:"
+        else:
+            suffix = "\nSummarize the above text in one word:"
+        if text and not add_image_token and not add_video_token:
+            return text + suffix
+        return suffix
 
     prompt = instruction
     if text:
@@ -2047,6 +2106,66 @@ def process_input_text(instruction, model_backbone, text=None, add_video_token=F
     return prompt
 
 
+def E5Omni_process_fn(model_inputs: dict, processor, max_length=None):
+    """e5-omni eval preprocessing.
+
+    e5-omni requires add_generation_prompt=True and an appended <|endoftext|>
+    anchor for last-token pooling. Patch both processor and tokenizer owners because
+    NVOmni_process_fn may call either apply_chat_template implementation.
+    """
+    owners = []
+    for obj in [processor, getattr(processor, "tokenizer", None)]:
+        if obj is not None and hasattr(obj, "apply_chat_template") and obj not in owners:
+            owners.append(obj)
+    originals = {id(owner): owner.apply_chat_template for owner in owners}
+
+    def _make_patch(orig):
+        def _patched(messages, **kwargs):
+            kwargs["add_generation_prompt"] = True
+            result = orig(messages, **kwargs)
+            if isinstance(result, str):
+                return result + "<|endoftext|>"
+            if isinstance(result, list):
+                return [item + "<|endoftext|>" if isinstance(item, str) else item for item in result]
+            return result
+        return _patched
+
+    for owner in owners:
+        owner.apply_chat_template = _make_patch(originals[id(owner)])
+    try:
+        return NVOmni_process_fn(model_inputs, processor, max_length=max_length)
+    finally:
+        for owner in owners:
+            owner.apply_chat_template = originals[id(owner)]
+
+
+def LCOOmni_process_fn(model_inputs: dict, processor, max_length=None):
+    """LCO-Embedding-Omni eval preprocessing.
+
+    LCO requires add_generation_prompt=True so last-token pooling lands on the
+    assistant anchor. It does not append <|endoftext|>.
+    """
+    owners = []
+    for obj in [processor, getattr(processor, "tokenizer", None)]:
+        if obj is not None and hasattr(obj, "apply_chat_template") and obj not in owners:
+            owners.append(obj)
+    originals = {id(owner): owner.apply_chat_template for owner in owners}
+
+    def _make_patch(orig):
+        def _patched(messages, **kwargs):
+            kwargs["add_generation_prompt"] = True
+            return orig(messages, **kwargs)
+        return _patched
+
+    for owner in owners:
+        owner.apply_chat_template = _make_patch(originals[id(owner)])
+    try:
+        return NVOmni_process_fn(model_inputs, processor, max_length=max_length)
+    finally:
+        for owner in owners:
+            owner.apply_chat_template = originals[id(owner)]
+
+
 process_vlm_inputs_fns = {
     PHI3V: Phi3V_process_fn,
     LLAVA_NEXT: Llava_NEXT_process_fn,
@@ -2059,6 +2178,9 @@ process_vlm_inputs_fns = {
     QWEN2_5_OMNI: NVOmni_process_fn,
     NVOMNIEMBED: NVOmni_process_fn,
     WAVE: NVOmni_process_fn,
+    E5_OMNI: E5Omni_process_fn,
+    JINA_OMNI: NVOmni_process_fn,
+    LCO_OMNI: LCOOmni_process_fn,
     INTERNVIDEO2: InternVideo2_process_fn,
     GME: Gme_process_fn,
     LamRA: Gme_process_fn,

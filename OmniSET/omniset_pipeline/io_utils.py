@@ -21,10 +21,7 @@ def _resolve_meta_path(dataset_root: Path, meta_file: Optional[Path]) -> Path:
     if meta_file is not None:
         return meta_file if meta_file.is_absolute() else dataset_root / meta_file
 
-    candidates = [
-        dataset_root / "mscoco_cmret_all.jsonl",
-        dataset_root / "mscoco_cmret.jsonl",
-    ]
+    candidates = [dataset_root / "omniset.jsonl"]
     for p in candidates:
         if p.exists():
             return p
@@ -84,17 +81,17 @@ def _canonical_coco_name(image_id: int, suffix: str) -> str:
     return f"COCO_val2014_{int(image_id):012d}.{suffix}"
 
 
-def read_mscoco_omni_tuples(
+def read_omniset_tuples(
     dataset_root: Path,
     max_samples: int,
     meta_file: Optional[Path] = None,
     catalog_file: Optional[Path] = None,
 ) -> List[Dict[str, str]]:
-    """Load valid text-image-video-audio tuples from mscoco-omni files.
+    """Load valid text-image-video-audio tuples from the merged OmniSET metadata.
 
-    Supported metadata schemas:
-    - mscoco_cmret_all.jsonl: rows contain image_id + file_name
-    - mscoco_cmret.jsonl: rows contain image_id + qry_text (media paths resolved via catalog.jsonl)
+    The expected metadata file is omniset.jsonl. Rows may provide direct media
+    paths, or image_id plus text/caption fields that can be resolved through
+    catalog.jsonl.
     """
     meta_path = _resolve_meta_path(dataset_root, meta_file)
     caption_map = _load_coco_caption_map(dataset_root)

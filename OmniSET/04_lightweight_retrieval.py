@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset-root",
         type=Path,
-        default=Path.home() / ".cache" / "huggingface" / "datasets" / "MMEB-V3" / "mscoco-omni",
+        default=PROJECT_ROOT / "data" / "MMEB-V3" / "omniset",
     )
     parser.add_argument(
         "--catalog-file",

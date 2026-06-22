@@ -1,6 +1,6 @@
 # MMEB-V3: Measuring the Performance Gaps of Omni-Modality Embedding Models
 
-<a target="_blank" href="https://github.com/TIGER-AI-Lab/VLM2Vec/tree/olm2vec">
+<a target="_blank" href="https://github.com/TIGER-AI-Lab/VLM2Vec">
 <img style="height:22pt" src="https://img.shields.io/badge/-MMEB--V3%20Code-green?style=flat&logo=github"></a>
 <a target="_blank" href="https://huggingface.co/datasets/VLM2Vec/MMEB-V3">
 <img style="height:22pt" src="https://img.shields.io/badge/-🤗%20Dataset(MMEB--V3)-red?style=flat"></a>
@@ -26,7 +26,7 @@
 <img style="height:22pt" src="https://img.shields.io/badge/-Tweet-blue?style=flat&logo=twitter"></a>
 <br>
 
-This branch contains the code and data interface for **MMEB-V3**, a comprehensive benchmark for evaluating **omni-modality embedding models** across text, image, video, audio, visual document, and agent-centric retrieval scenarios.
+This repository contains the code and data interface for **MMEB-V3**, a comprehensive benchmark for evaluating **omni-modality embedding models** across text, image, video, audio, visual document, and agent-centric retrieval scenarios.
 
 MMEB-V3 extends MMEB-V2 toward a fuller modality setting by adding **111 new tasks**, resulting in **190 tasks** in total. It introduces three major new evaluation categories:
 
@@ -42,7 +42,134 @@ MMEB-V3 aims to diagnose whether current embedding models can reliably follow mo
 
 - **MMEB-V3 Dataset**: https://huggingface.co/datasets/VLM2Vec/MMEB-V3
 
-- **Code Branch**: https://github.com/TIGER-AI-Lab/VLM2Vec/tree/olm2vec
+- **Code**: https://github.com/TIGER-AI-Lab/VLM2Vec
+
+<img width="768" alt="MMEB-V3 Overview" src="assets/mmeb_v3.png">
+
+## MMEB-V3 Dataset Preparation
+
+The MMEB-V3 Hugging Face dataset is organized as compressed assets plus lightweight metadata. After download and extraction, all V1, V2, and V3 evaluation data should live under one MMEB-V3 root so the evaluation scripts can be run with a single `--data_basedir` argument.
+
+Download the dataset files:
+
+```bash
+export MMEB_V3_ROOT=/path/to/MMEB-V3
+hf download VLM2Vec/MMEB-V3 \
+  --repo-type dataset \
+  --local-dir $MMEB_V3_ROOT
+```
+
+Materialize the evaluation-ready directory layout from the downloaded archives:
+
+```bash
+python experiments/public/data/dataset_setup_v3.py --root $MMEB_V3_ROOT
+python experiments/public/data/dataset_setup_v3.py --root $MMEB_V3_ROOT --check-only
+```
+
+The setup script is idempotent: it skips directories marked with `.done`, safely extracts tar/zip files, and checks the expected final layout. If `image-query` is not included in your local download, pass an existing local copy with `--image-query-source /path/to/image-query`; otherwise no extra argument is needed.
+
+Downloaded archives use `_tasks` directories for raw compressed assets. The setup script materializes them into the `-tasks` directories consumed by the evaluation code. In particular, upload raw video and visual-document assets as:
+
+```text
+MMEB-V3/
+  image_tasks/
+    mmeb_v1.tar.gz
+    MCMR.tar.gz
+  audio_tasks/
+    *.tar
+  video_tasks/
+    data/
+    frames/
+      video_cls.tar.gz
+      video_ret.tar.gz
+      video_mret.tar.gz-*
+      video_qa.tar.gz-*
+  visdoc_tasks/
+    visdoc-tasks.data.tar.gz
+    visdoc-tasks.images.tar.gz
+  gui_tasks/
+  memory_tasks/
+  text_tasks/
+  tool_tasks/
+  omniset.tar.gz
+```
+
+Do not upload already materialized directories such as `video-tasks/frames/video_cls/`, `video-tasks/frames/video_ret/`, `video-tasks/frames/video_mret/`, `video-tasks/frames/video_qa/`, `visdoc-tasks/data/`, or `visdoc-tasks/images/` if the corresponding archives are uploaded.
+
+Expected evaluation-ready layout:
+
+```text
+MMEB-V3/
+  image-tasks/
+    MMEB/
+    MCMR/
+  image-query/
+  audio-tasks/
+  video-tasks/
+    data/
+    frames/
+      video_cls/
+      video_ret/
+      video_mret/
+      video_qa/
+  visdoc-tasks/
+    data/
+    images/
+  text-tasks/
+  tool-tasks/
+  memory-tasks/
+  gui-tasks/
+    GUIAct/
+    Mind2Web/
+    GAE-GUIAct/
+    GAE-Mind2Web/
+  omniset/
+    omniset.jsonl
+    catalog.jsonl
+    val2014/
+    videos/
+    audios/
+    frames_omni/
+```
+
+For OmniSET specifically, the dataset release may contain `omniset.tar.gz`. The setup script extracts it into `MMEB-V3/omniset/`. Manual extraction is also valid:
+
+```bash
+tar -xzf $MMEB_V3_ROOT/omniset.tar.gz -C $MMEB_V3_ROOT
+```
+
+## MMEB-V3 Evaluation
+
+For standard MMEB-V3 tasks, pass the MMEB-V3 root directory to `--data_basedir`. For example, to evaluate image tasks with Omni-Embed-Nemotron:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python eval.py \
+  --pooling mean \
+  --normalize true \
+  --per_device_eval_batch_size 8 \
+  --dataloader_num_workers 1 \
+  --model_backbone nvomniembed \
+  --model_name /path/to/omni-embed-nemotron-3b \
+  --dataset_config experiments/public/eval/image.yaml \
+  --encode_output_path exps/vlm2vec/omni-embed-nemotron-3b/image \
+  --data_basedir $MMEB_V3_ROOT
+```
+
+The same evaluation entrypoint also supports adapted omni-modality baselines such as `e5_omni` and `lco_omni` by changing `--model_backbone`, `--model_name`, pooling, and output path as appropriate for the model.
+
+Run OmniSET with the dedicated script. `DATA_BASEDIR` should point directly to the `omniset/` directory:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+MODEL_PATH=/path/to/omni-embed-nemotron-3b \
+MODEL_BACKBONE=nvomniembed \
+DATA_BASEDIR=$MMEB_V3_ROOT/omniset \
+OUTPUT_PATH=exps/vlm2vec/omni-embed-nemotron-3b/omniset \
+PER_DEVICE_EVAL_BATCH_SIZE=8 \
+bash experiments/public/eval/eval_omniset.sh
+```
+
+For backbones without audio support, set `SKIP_AUDIO_TASKS=true` or use `experiments/public/eval/cross_modality_no_audio.yaml` through `DATA_CONFIG_PATH`.
 
 ---
 

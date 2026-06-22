@@ -8,8 +8,8 @@ This directory provides a lightweight visualization / retrieval demo pipeline:
 
 > **Note**: this folder is the visualization / lightweight retrieval demo only.
 > The full OmniSET cross-modal retrieval evaluation is run via
-> `experiments/public/eval/eval_cross_mod.sh` at the project root (relative to
-> this folder: `../experiments/public/eval/eval_cross_mod.sh`). See that script
+> `experiments/public/eval/eval_omniset.sh` at the project root (relative to
+> this folder: `../experiments/public/eval/eval_omniset.sh`). See that script
 > for the complete evaluation workflow.
 
 ## Directory Structure
@@ -36,11 +36,12 @@ If you want to force recomputing embeddings:
 FORCE_REEMBED=1 bash run_plot.sh
 ```
 
-If you want to pin one GPU and use your metadata path explicitly:
+If you want to pin one GPU and use an explicit dataset path:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 \
-META_FILE="$HOME/.cache/huggingface/datasets/MMEB-V3/mscoco-omni/mscoco_cmret.jsonl" \
+DATASET_ROOT=/path/to/MMEB-V3/omniset \
+META_FILE=omniset.jsonl \
 bash run_plot.sh
 ```
 
@@ -84,13 +85,13 @@ python 04_lightweight_retrieval.py \
 
 ## Quick Start (Manual 3 Steps)
 
-Run the following commands inside `OLM2Vec/OLM2Vec/OmniSET`:
+Run the following commands inside `OmniSET`:
 
 ```bash
 python 01_compute_embeddings.py \
-  --dataset-root "$HOME/.cache/huggingface/datasets/MMEB-V3/mscoco-omni" \
-  --meta-file "$HOME/.cache/huggingface/datasets/MMEB-V3/mscoco-omni/mscoco_cmret.jsonl" \
-  --catalog-file "$HOME/.cache/huggingface/datasets/MMEB-V3/mscoco-omni/catalog.jsonl" \
+  --dataset-root "/path/to/MMEB-V3/omniset" \
+  --meta-file "omniset.jsonl" \
+  --catalog-file "catalog.jsonl" \
   --model-path "$HOME/.cache/huggingface/omni-embed-nemotron-3b" \
   --output-dir ./outputs/step1_embeddings \
   --max-samples 0

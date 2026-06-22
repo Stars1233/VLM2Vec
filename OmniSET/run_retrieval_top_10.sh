@@ -2,13 +2,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 ENV_NAME="${ENV_NAME:-olm2vec}"
 CONDA_SH="${CONDA_SH:-${HOME}/miniconda3/etc/profile.d/conda.sh}"
 
 EMBEDDING_NPZ="${EMBEDDING_NPZ:-${SCRIPT_DIR}/outputs/step1_embeddings/embeddings_and_queries.npz}"
-DATASET_ROOT="${DATASET_ROOT:-${HOME}/.cache/huggingface/datasets/MMEB-V3/mscoco-omni}"
-CATALOG_FILE="${CATALOG_FILE:-${DATASET_ROOT}/catalog.jsonl}"
+DATASET_ROOT="${DATASET_ROOT:-${PROJECT_ROOT}/data/MMEB-V3/omniset}"
+CATALOG_FILE="${CATALOG_FILE:-catalog.jsonl}"
 
 SOURCE_MODALITY="${SOURCE_MODALITY:-t}"
 TARGET_MODALITY="${TARGET_MODALITY:-i}"
@@ -37,8 +38,8 @@ Environment variables:
   CONDA_SH=$HOME/miniconda3/etc/profile.d/conda.sh
 
   EMBEDDING_NPZ=./outputs/step1_embeddings/embeddings_and_queries.npz
-  DATASET_ROOT=$HOME/.cache/huggingface/datasets/MMEB-V3/mscoco-omni
-  CATALOG_FILE=$HOME/.cache/huggingface/datasets/MMEB-V3/mscoco-omni/catalog.jsonl
+  DATASET_ROOT=$PROJECT_ROOT/data/MMEB-V3/omniset
+  CATALOG_FILE=catalog.jsonl
 
   SOURCE_MODALITY=t
   TARGET_MODALITY=i

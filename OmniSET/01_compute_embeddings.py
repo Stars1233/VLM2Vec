@@ -21,7 +21,7 @@ from omniset_pipeline.embedding_builder import (  # noqa: E402
     choose_device,
     load_model_bundle,
 )
-from omniset_pipeline.io_utils import read_mscoco_omni_tuples, save_embedding_bundle  # noqa: E402
+from omniset_pipeline.io_utils import read_omniset_tuples, save_embedding_bundle  # noqa: E402
 
 
 MODEL_BACKBONE_CHOICES = ["nvomniembed", "qwen2_5_omni", "qwen3_vl", "wave"]
@@ -32,12 +32,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset-root",
         type=Path,
-        default=Path.home() / ".cache" / "huggingface" / "datasets" / "MMEB-V3" / "mscoco-omni",
+        default=PROJECT_ROOT / "data" / "MMEB-V3" / "omniset",
     )
     parser.add_argument(
         "--meta-file",
         type=Path,
-        default=Path("mscoco_cmret_all.jsonl"),
+        default=Path("omniset.jsonl"),
         help="Metadata jsonl path (absolute or relative to dataset root).",
     )
     parser.add_argument(
@@ -83,7 +83,7 @@ def main() -> None:
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    tuples = read_mscoco_omni_tuples(
+    tuples = read_omniset_tuples(
         dataset_root=args.dataset_root,
         max_samples=args.max_samples,
         meta_file=args.meta_file,

@@ -22,6 +22,9 @@ from src.model.processor import (
     QWEN2_5_OMNI,
     NVOMNIEMBED,
     WAVE,
+    E5_OMNI,
+    JINA_OMNI,
+    LCO_OMNI,
     process_vlm_inputs_fns,
 )
 from src.data.collator.train_collator_omni import OmniAutoProcessorCollator
@@ -300,14 +303,28 @@ class MultimodalEvalDataCollator:
 
         try:
             # Call the processor directly (grouping is handled inside processor now)
-            from src.model.processor import Omni_process_fn, NVOmni_process_fn, NVOMNIEMBED, QWEN2_5_OMNI, WAVE
-            # Keep eval behavior consistent with training:
-            # use apply_chat_template + process_mm_info for both qwen2_5_omni and nvomniembed.
-            process_fn = (
-                NVOmni_process_fn
-                if self.model_args.model_backbone in {NVOMNIEMBED, QWEN2_5_OMNI, WAVE}
-                else Omni_process_fn
+            from src.model.processor import (
+                Omni_process_fn,
+                NVOmni_process_fn,
+                E5Omni_process_fn,
+                LCOOmni_process_fn,
+                NVOMNIEMBED,
+                QWEN2_5_OMNI,
+                WAVE,
+                E5_OMNI,
+                JINA_OMNI,
+                LCO_OMNI,
             )
+            # Keep eval behavior consistent with training: use apply_chat_template
+            # + process_mm_info for qwen/omni-family models.
+            if self.model_args.model_backbone == E5_OMNI:
+                process_fn = E5Omni_process_fn
+            elif self.model_args.model_backbone == LCO_OMNI:
+                process_fn = LCOOmni_process_fn
+            elif self.model_args.model_backbone in {NVOMNIEMBED, QWEN2_5_OMNI, WAVE, JINA_OMNI}:
+                process_fn = NVOmni_process_fn
+            else:
+                process_fn = Omni_process_fn
             omni_inputs = dict(inputs)
             # input_raw_wav is only needed by WAVE official BEATs branch.
             omni_inputs["_keep_input_raw_wav"] = (self.model_args.model_backbone == WAVE)
@@ -334,7 +351,7 @@ class MultimodalEvalDataCollator:
           - query_text/query_image/query_audio
           - cand_text/cand_image or cand_video/cand_audio
         """
-        use_omni = self.model_args.model_backbone in {QWEN2_5_OMNI, NVOMNIEMBED, WAVE}
+        use_omni = self.model_args.model_backbone in {QWEN2_5_OMNI, NVOMNIEMBED, WAVE, E5_OMNI, JINA_OMNI, LCO_OMNI}
         # Ensure qwen omni warning filters are active in dataloader worker processes too.
         if use_omni and not getattr(self, "_qwen_warning_filter_ready", False):
             try:

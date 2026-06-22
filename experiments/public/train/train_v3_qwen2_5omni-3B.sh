@@ -4,6 +4,10 @@ echo "conda location: $(which conda)"
 echo "Python location: $(which python)"
 echo "Python version: $(python --version)"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+MODEL_CACHE_DIR="${MODEL_CACHE_DIR:-$HOME/.cache/huggingface}"
+
 # export HF_DATASETS_CACHE=
 # export HF_HOME=
 # export WANDB_DISABLED=false
@@ -21,7 +25,7 @@ echo $EXP_DIR
 mkdir -p $EXP_DIR/wandb
 rm -rf $EXP_DIR/wandb/*
 
-cd /data/mengrui/OLM2Vec/OLM2Vec
+cd $PROJECT_ROOT
 cmd="CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 torchrun \
 --nproc_per_node=8 \
@@ -30,7 +34,7 @@ torchrun \
 train_omni.py \
 --lora true \
 --lora_r 16 \
---model_name /data/mengrui/.cache/huggingface/Qwen2.5-Omni-3B \
+--model_name $MODEL_CACHE_DIR/Qwen2.5-Omni-3B \
 --model_type qwen2_5_omni \
 --bf16 \
 --pooling last_token \

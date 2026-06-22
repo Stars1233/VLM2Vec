@@ -2,11 +2,11 @@
 # - Removes all tasks with audio query/input.
 # - Removes audio candidates from cand_mod.
 
-MSCOCO_t2i:
-    dataset_parser: mscoco_cmret
-    dataset_name: MSCOCO_cmt2i
+OmniSET_t2i:
+    dataset_parser: omniset
+    dataset_name: OmniSET_cmt2i
     dataset_split: test
-    data_path: /data/mengrui/.cache/huggingface/datasets/MMEB-V3/mscoco-omni/mscoco_cmret.jsonl
+    data_path: omniset.jsonl
     image_root: val2014
     video_root: videos
     audio_root: audios
@@ -18,11 +18,11 @@ MSCOCO_t2i:
     cand_mod: ['T', 'I', 'V']
     eval_type: local
 
-MSCOCO_t2v:
-    dataset_parser: mscoco_cmret
-    dataset_name: MSCOCO_cmt2v
+OmniSET_t2v:
+    dataset_parser: omniset
+    dataset_name: OmniSET_cmt2v
     dataset_split: test
-    data_path: /data/mengrui/.cache/huggingface/datasets/MMEB-V3/mscoco-omni/mscoco_cmret.jsonl
+    data_path: omniset.jsonl
     image_root: val2014
     video_root: videos
     audio_root: audios
@@ -34,11 +34,11 @@ MSCOCO_t2v:
     cand_mod: ['T', 'I', 'V']
     eval_type: local
 
-MSCOCO_i2t:
-    dataset_parser: mscoco_cmret
-    dataset_name: MSCOCO_cmi2t
+OmniSET_i2t:
+    dataset_parser: omniset
+    dataset_name: OmniSET_cmi2t
     dataset_split: test
-    data_path: /data/mengrui/.cache/huggingface/datasets/MMEB-V3/mscoco-omni/mscoco_cmret.jsonl
+    data_path: omniset.jsonl
     image_root: val2014
     video_root: videos
     audio_root: audios
@@ -50,11 +50,11 @@ MSCOCO_i2t:
     cand_mod: ['T', 'I', 'V']
     eval_type: local
 
-MSCOCO_i2v:
-    dataset_parser: mscoco_cmret
-    dataset_name: MSCOCO_cmi2v
+OmniSET_i2v:
+    dataset_parser: omniset
+    dataset_name: OmniSET_cmi2v
     dataset_split: test
-    data_path: /data/mengrui/.cache/huggingface/datasets/MMEB-V3/mscoco-omni/mscoco_cmret.jsonl
+    data_path: omniset.jsonl
     image_root: val2014
     video_root: videos
     audio_root: audios
@@ -66,11 +66,11 @@ MSCOCO_i2v:
     cand_mod: ['T', 'I', 'V']
     eval_type: local
 
-MSCOCO_v2t:
-    dataset_parser: mscoco_cmret
-    dataset_name: MSCOCO_cmv2t
+OmniSET_v2t:
+    dataset_parser: omniset
+    dataset_name: OmniSET_cmv2t
     dataset_split: test
-    data_path: /data/mengrui/.cache/huggingface/datasets/MMEB-V3/mscoco-omni/mscoco_cmret.jsonl
+    data_path: omniset.jsonl
     image_root: val2014
     video_root: videos
     audio_root: audios
@@ -82,11 +82,11 @@ MSCOCO_v2t:
     cand_mod: ['T', 'I', 'V']
     eval_type: local
 
-MSCOCO_v2i:
-    dataset_parser: mscoco_cmret
-    dataset_name: MSCOCO_cmv2i
+OmniSET_v2i:
+    dataset_parser: omniset
+    dataset_name: OmniSET_cmv2i
     dataset_split: test
-    data_path: /data/mengrui/.cache/huggingface/datasets/MMEB-V3/mscoco-omni/mscoco_cmret.jsonl
+    data_path: omniset.jsonl
     image_root: val2014
     video_root: videos
     audio_root: audios

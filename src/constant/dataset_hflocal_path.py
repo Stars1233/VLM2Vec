@@ -1,7 +1,7 @@
 # (repo, subset, split)
 import os
 
-BASE_RAW_DATA_DIR = ".........."
+BASE_RAW_DATA_DIR = os.environ.get("MMEB_V3_DATA_DIR", "data/MMEB-V3")
 
 EVAL_DATASET_HF_PATH = {
     # Video-RET
