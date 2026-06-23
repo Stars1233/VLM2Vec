@@ -11,6 +11,7 @@ except ImportError:
     from src.model.vlm_backbone.qwen2_vl.qwen_vl_utils import smart_resize
 from PIL import Image
 import torchaudio
+import soundfile as sf  # torch 2.11 torchaudio lacks .info and can't encode/decode BytesIO (torchcodec); use soundfile
 from src.model.processor import (
     LLAVA_NEXT,
     QWEN2_VL,
@@ -438,6 +439,21 @@ class MultimodalEvalDataCollator:
                     audio_tensors.append(None)
                     continue
 
+                # 0) datasets torchcodec AudioDecoder (Audio feature, decode=True): grab the
+                # raw encoded bytes/path and fall through to soundfile decoding (avoids torchcodec).
+                if type(audio_item).__name__ == "AudioDecoder":
+                    enc = getattr(audio_item, "_hf_encoded", None)
+                    if isinstance(enc, dict) and (enc.get("bytes") or enc.get("path")):
+                        audio_item = {"path": enc.get("path"), "bytes": enc.get("bytes")}
+                    else:
+                        _s = audio_item.get_all_samples()
+                        wav = _s.data
+                        if wav.dim() > 1:
+                            wav = wav.mean(0)
+                        wav = _safe_resample(wav, _s.sample_rate, target_sr)
+                        audio_tensors.append(_crop_audio(wav))
+                        continue
+
                 # 1) HF decoded audio dict: {"array":..., "sampling_rate":...}
                 if isinstance(audio_item, dict) and ("array" in audio_item):
                     arr = audio_item["array"]
@@ -471,11 +487,12 @@ class MultimodalEvalDataCollator:
                     end_t = audio_item.get("end", None)
 
                     if a_bytes is not None:
-                        wave, sr = torchaudio.load(io.BytesIO(a_bytes))
+                        _d, sr = sf.read(io.BytesIO(a_bytes), dtype="float32")
+                        wave = torch.from_numpy(_d.mean(axis=1) if _d.ndim > 1 else _d).float()
                     elif a_path:
-                        info = torchaudio.info(a_path)
-                        sr = info.sample_rate
-                        total_frames = int(getattr(info, "num_frames", 0) or 0)
+                        _si = sf.info(a_path)
+                        sr = _si.samplerate
+                        total_frames = int(getattr(_si, "frames", 0) or 0)
                         frame_offset = max(0, int(start_t * sr))
                         if total_frames > 0:
                             frame_offset = min(frame_offset, max(0, total_frames - 1))
@@ -490,7 +507,10 @@ class MultimodalEvalDataCollator:
                         else:
                             num_frames = -1
 
-                        wave, _ = torchaudio.load(a_path, frame_offset=frame_offset, num_frames=num_frames)
+                        _d, sr = sf.read(a_path, start=frame_offset,
+                                         frames=(num_frames if num_frames and num_frames > 0 else -1),
+                                         dtype="float32")
+                        wave = torch.from_numpy(_d.mean(axis=1) if _d.ndim > 1 else _d).float()
                     else:
                         raise ValueError("audio item missing array/path/bytes")
 
