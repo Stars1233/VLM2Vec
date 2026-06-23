@@ -56,7 +56,14 @@ MODEL_PATH=$NEMO MODEL_BACKBONE=nvomniembed POOLING=mean ENV_PYTHON=$PYNEMO \
 ```
 `eval.py` caches `{dataset}_score.json` and skips completed datasets — re-submit to resume.
 
-## 4. SLURM gotchas (this cluster)
+## 4. Per-run gotchas (verified)
+- **GUI (nemotron):** use `BATCH=4` — high-res screenshots OOM at batch 32. Requires the
+  vision-rotary fix (committed on this branch) or it raises `Triton Error [CUDA]: invalid argument`.
+- **Audio:** `AUDIO_MAX_SECONDS=30` (else 30s clips truncate to 10.24s) and `NPROC=1`
+  (SoundDescs corpus materialization OOMs at 8 ranks).
+- **Video:** long clips can need a smaller `BATCH` (e.g. 4) for the same rotary/OOM reasons.
+
+## 4b. SLURM gotchas (this cluster)
 - Exclude FabricManager-down / squatted nodes (the preflight aborts fast if you land on one; resubmit).
 - Audio: use `NPROC=1` (8 ranks each materialize the SoundDescs corpus → >512G CPU OOM).
 
