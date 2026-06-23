@@ -1,0 +1,6 @@
+dataset,Qwen3-VL-Embedding-2B (paper),Qwen3-VL-Embedding-8B (paper),VLM2Vec-Qwen2VL-7B (paper),VLM2Vec-V2.0-2B (paper),GME-7B (paper),WAVE-7B (paper),Omni-Embed-Nemotron-3B (paper),Omni-Embed-Nemotron-3B (reproduced),diff (repro - paper),eval_time_s,eval_time
+DeepPlanning,19.2,9.2,18.3,20.8,15.0,0.8,34.2,34.2,0.0,24,0m24
+KnowMeBench,41.5,35.3,22.3,32.6,19.0,11.6,44.3,44.4,0.1,74,1m14
+PeerQA,17.7,16.2,11.0,21.3,14.7,3.7,18.4,18.4,0.0,14,0m14
+REALTALK,35.4,30.5,11.8,18.4,19.6,6.6,32.4,32.3,-0.1,14,0m14
+AVG (n=4),28.5,22.8,15.9,23.3,17.1,5.7,32.3,32.3,0.0,,

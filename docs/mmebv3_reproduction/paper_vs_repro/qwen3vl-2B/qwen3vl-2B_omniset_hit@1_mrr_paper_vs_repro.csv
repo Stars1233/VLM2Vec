@@ -1,0 +1,7 @@
+direction,Hit@1 (paper),Hit@1 (repro),Hit@1 diff,MRR (paper),MRR (repro),MRR diff,n
+T2I,(no paper),0.0,,(no paper),2.9,,101
+T2V,(no paper),32.7,,(no paper),60.6,,101
+I2T,(no paper),0.0,,(no paper),29.7,,101
+I2V,(no paper),100.0,,(no paper),100.0,,101
+V2T,(no paper),0.0,,(no paper),2.5,,101
+V2I,(no paper),2.0,,(no paper),15.3,,101
