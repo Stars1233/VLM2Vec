@@ -82,6 +82,13 @@ def _patch_qwen_omni_flash_rotary_dtype():
         return True
 
     def _apply_rotary_pos_emb_flashatt(self, tensor: torch.Tensor, freqs: torch.Tensor) -> torch.Tensor:
+        # Route through the library's pure-torch vision rotary instead of flash_attn's
+        # Triton kernel: the Triton path raises "Triton Error [CUDA]: invalid argument"
+        # on long/high-res vision sequences (e.g. GUI screenshots, long video). The
+        # pure-torch path is numerically identical to the sdpa path; varlen flash
+        # attention itself is unaffected.
+        if hasattr(qwen_omni, "apply_rotary_pos_emb_vision"):
+            return qwen_omni.apply_rotary_pos_emb_vision(tensor, freqs)
         tensor_ = tensor.float()
         cos = freqs.cos().to(tensor_.dtype)
         sin = freqs.sin().to(tensor_.dtype)
