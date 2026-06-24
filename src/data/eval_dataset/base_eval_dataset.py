@@ -122,30 +122,78 @@ def generate_cand_dataset(dataset, corpus):
     """
     Used for generating candidate datasets.
     Flatten candidates, merge with corpus, deduplication
+    支持 cand_image 和 cand_video（用于视频数据集）
     """
     cand_rows = []
     all_cand_name = set()
+
+    def _normalize_audio_item(a):
+        # Common pattern in datasets: cand_audio stores a single-item list.
+        if isinstance(a, list) and len(a) == 1:
+            return a[0]
+        return a
+
     for row in dataset:
-        assert len(row["cand_text"]) == len(row["cand_image"]) == len(row["dataset_infos"]["cand_names"])
-        for cand_text, cand_image, cand_name in zip(row["cand_text"], row["cand_image"], row["dataset_infos"]["cand_names"]):
+        # NOTE: Comment translated to English.
+        cand_visual_key = None
+        if "cand_video" in row:
+            cand_visual_key = "cand_video"
+        elif "cand_image" in row:
+            cand_visual_key = "cand_image"
+        
+        # NOTE: Comment translated to English.
+        if (
+            ("cand_text" not in row)
+            or (cand_visual_key is None)
+            or ("dataset_infos" not in row)
+            or (not isinstance(row["dataset_infos"], dict))
+            or ("cand_names" not in row["dataset_infos"])
+        ):
+            continue
+
+        # NOTE: Comment translated to English.
+        cand_audio_seq = row.get("cand_audio", None)
+        if cand_audio_seq is not None:
+            assert len(cand_audio_seq) == len(row["cand_text"])
+        else:
+            cand_audio_seq = [None] * len(row["cand_text"])
+
+        assert len(row["cand_text"]) == len(row[cand_visual_key]) == len(row["dataset_infos"]["cand_names"]) == len(cand_audio_seq)
+        for cand_text, cand_visual, cand_name, cand_audio in zip(
+            row["cand_text"], row[cand_visual_key], row["dataset_infos"]["cand_names"], cand_audio_seq
+        ):
             if cand_name not in all_cand_name:
-                cand_rows.append({
+                # NOTE: Comment translated to English.
+                cand_row = {
                     "cand_text": [cand_text],
-                    "cand_image": [cand_image],
                     "dataset_infos": {"cand_name": cand_name},
-                })
+                }
+                cand_row[cand_visual_key] = [cand_visual]
+                if cand_audio is not None:
+                    cand_row["cand_audio"] = _normalize_audio_item(cand_audio)
+                cand_rows.append(cand_row)
                 all_cand_name.add(cand_name)
 
     if corpus is not None:
         for row in corpus:
-            assert len(row["cand_text"]) == len(row["cand_image"]) == len(row["dataset_infos"]["cand_names"]) == 1
+            # NOTE: Comment translated to English.
+            corpus_visual_key = "cand_video" if "cand_video" in row else "cand_image"
+            
+            assert len(row["cand_text"]) == len(row[corpus_visual_key]) == len(row["dataset_infos"]["cand_names"]) == 1
             cand_name = row["dataset_infos"]["cand_names"][0]
             if cand_name not in all_cand_name:
-                cand_rows.append({
+                corpus_row = {
                     "cand_text": row["cand_text"],
-                    "cand_image": row["cand_image"],
                     "dataset_infos": {"cand_name": row["dataset_infos"]["cand_names"][0]},
-                })
+                }
+                corpus_row[corpus_visual_key] = row[corpus_visual_key]
+                if "cand_audio" in row:
+                    # corpus row is one candidate; keep a single audio item.
+                    corpus_audio = row["cand_audio"]
+                    if isinstance(corpus_audio, list) and len(corpus_audio) == 1:
+                        corpus_audio = corpus_audio[0]
+                    corpus_row["cand_audio"] = _normalize_audio_item(corpus_audio)
+                cand_rows.append(corpus_row)
                 all_cand_name.add(cand_name)
 
     cand_dataset = Dataset.from_list(cand_rows)

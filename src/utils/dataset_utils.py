@@ -44,6 +44,11 @@ def load_qrels_mapping(qrels):
 
 
 def load_hf_dataset(hf_path):
+    # NOTE: Comment translated to English.
+    if len(hf_path) == 4 and hf_path[3] == "local":
+        return load_local_hf_dataset(hf_path[0], hf_path[1], hf_path[2])
+    
+    # NOTE: Comment translated to English.
     repo, subset, split = hf_path
     if subset and split:
         return load_dataset(repo, subset, split=split)
@@ -57,22 +62,72 @@ def load_hf_dataset(hf_path):
 
 def load_local_hf_dataset(dataset_path: str, subset: str = None, split: str = None):
     """
-    Loads a Hugging Face dataset from local Parquet files.
+    Loads a Hugging Face dataset from local Parquet files or JSON/JSONL files.
     Args:
-        dataset_path (str): The base path to the dataset directory
+        dataset_path (str): The base path to the dataset directory or file
         subset (str, optional): The name of the subdirectory containing the data files (e.g., "corpus").
         split (str, optional): Which split of the data to load (e.g., "train", "test").
     Returns: Dataset or DatasetDict: The loaded dataset.
     """
-    if subset and split:
-        dataset = datasets.load_dataset(dataset_path, subset, split=split)
-    elif subset:
-        dataset = datasets.load_dataset(dataset_path, subset)
-    elif split:
-        dataset = datasets.load_dataset(dataset_path, split=split)
+    # NOTE: Comment translated to English.
+    if dataset_path.endswith('.json') or dataset_path.endswith('.jsonl'):
+        # NOTE: Comment translated to English.
+        dataset = datasets.load_dataset("json", data_files=dataset_path)
+        # NOTE: Comment translated to English.
+        if isinstance(dataset, datasets.DatasetDict):
+            available_splits = list(dataset.keys())
+            if len(available_splits) == 1 and split and split not in available_splits:
+                # NOTE: Comment translated to English.
+                dataset = dataset[available_splits[0]]
+            elif split and split in available_splits:
+                dataset = dataset[split]
+        return dataset
     else:
-        dataset = datasets.load_dataset(dataset_path)
-    return dataset
+        # NOTE: Comment translated to English.
+        # NOTE: Comment translated to English.
+        if subset:
+            subset_path = os.path.join(dataset_path, subset)
+            if os.path.isdir(subset_path):
+                # NOTE: Comment translated to English.
+                import glob
+                parquet_files = []
+                split_parquet_files = []
+                if split:
+                    split_parquet_files = sorted(glob.glob(os.path.join(subset_path, f"{split}-*.parquet")))
+                    if not split_parquet_files:
+                        split_parquet_files = sorted(glob.glob(os.path.join(subset_path, f"{split}*.parquet")))
+                    parquet_files = split_parquet_files
+                if not parquet_files:
+                    parquet_files = sorted(glob.glob(os.path.join(subset_path, "*.parquet")))
+                if parquet_files:
+                    if split and not split_parquet_files:
+                        print_rank(
+                            f"[load_local_hf_dataset] split='{split}' has no matching parquet in {subset_path}, "
+                            f"fallback to all parquet files."
+                        )
+                    # NOTE: Comment translated to English.
+                    import pandas as pd
+                    df = pd.concat([pd.read_parquet(f) for f in parquet_files], ignore_index=True)
+                    dataset = datasets.Dataset.from_pandas(df, preserve_index=False)
+                    return dataset
+                
+                # NOTE: Comment translated to English.
+                try:
+                    dataset = datasets.load_dataset("imagefolder", data_dir=subset_path, split=split)
+                    return dataset
+                except Exception as e:
+                    print(f"Failed to load as imagefolder: {e}, trying standard method...")
+        
+        # NOTE: Comment translated to English.
+        if subset and split:
+            dataset = datasets.load_dataset(dataset_path, subset, split=split)
+        elif subset:
+            dataset = datasets.load_dataset(dataset_path, subset)
+        elif split:
+            dataset = datasets.load_dataset(dataset_path, split=split)
+        else:
+            dataset = datasets.load_dataset(dataset_path)
+        return dataset
 
 
 def load_hf_dataset_multiple_subset(hf_path, subset_names):

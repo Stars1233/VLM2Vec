@@ -670,14 +670,14 @@ class GradCacheLateProcessTrainer(MMEBTrainer):
     def training_step(self, model, inputs, *args, **kwargs) -> torch.Tensor:
         model.train()
         queries, targets = inputs
-        
+
         if hasattr(model, "module"):
             device = model.module.device
         elif hasattr(model, "device"):
             device = model.device
         else:
             device = next(model.parameters()).device
-            
+
         queries = batch_to_device(queries, device)
         targets = batch_to_device(targets, device)
 

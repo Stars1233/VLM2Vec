@@ -1,3 +1,6 @@
+import os
+from src.constant.dataset_hflocal_path import BASE_RAW_DATA_DIR
+
 # (repo, subset, split)
 EVAL_DATASET_HF_PATH = {
     # Video-RET
@@ -70,4 +73,43 @@ EVAL_DATASET_HF_PATH = {
     # "ViDoRe_economics_reports_v2":("vidore/synthetic_economics_macro_economy_2024_filtered_v1.0", None, "test"),
     # "ViDoRe_economics_reports_v2_multilingual":("vidore/synthetic_economics_macro_economy_2024_filtered_v1.0_multilingual", None, "test"),
     # "ViDoRe_esg_reports_human_labeled_v2":("vidore/esg_reports_human_labeled_v2", None, "test"),
+    
+    # ToolDe
+    "ToolDe-Queries-web": (os.path.join(BASE_RAW_DATA_DIR, "tool-tasks", "ToolDe-Queries", "web"), "ToolDe-Queries-web", "test"),
+    "ToolDe-Queries-code": (os.path.join(BASE_RAW_DATA_DIR, "tool-tasks", "ToolDe-Queries", "code"), "ToolDe-Queries-code", "test"),
+    "ToolDe-Queries-customized": (os.path.join(BASE_RAW_DATA_DIR, "tool-tasks", "ToolDe-Queries", "customized"), "ToolDe-Queries-customized", "test"),
+    
+    # Audio-CLS
+    "NSynth": (os.path.join(BASE_RAW_DATA_DIR, "audio-tasks", "nsynth-1k"), "NSynth", "test"),
+    "ESC-50": (os.path.join(BASE_RAW_DATA_DIR, "audio-tasks", "esc50"), "ESC-50", "test"),
+    "UrbanSound8K": (os.path.join(BASE_RAW_DATA_DIR, "audio-tasks", "urbansound8k"), "UrbanSound8K", "test"),
+    "SpeechCommands": (os.path.join(BASE_RAW_DATA_DIR, "audio-tasks", "speechcommand-1k"), "SpeechCommands", "test"),
+    "CREMA-D": (os.path.join(BASE_RAW_DATA_DIR, "audio-tasks", "creamD"), "CREMA-D", "test"),
+    # Audio-RET
+    "SoundDescs": (os.path.join(BASE_RAW_DATA_DIR, "audio-tasks", "sounddescs-1k"), "SoundDescs", "test"),
+    "Clotho": (os.path.join(BASE_RAW_DATA_DIR, "audio-tasks", "clotho"), "Clotho", "test"),
+    "AVE": (os.path.join(BASE_RAW_DATA_DIR, "audio-tasks", "AVE", "AVE_Dataset"), "AVE", "test"),
+    "SpeechCOCO": (os.path.join(BASE_RAW_DATA_DIR, "audio-tasks", "speechcoco-1k"), "SpeechCOCO", "validation"),
+    # Audio-GND
+    "TUTSound": (os.path.join(BASE_RAW_DATA_DIR, "audio-tasks", "tutsound"), "TUTSound", "test"),
+
+
+    # Memory-RET
+    "KnowMeBench": (os.path.join(BASE_RAW_DATA_DIR, "memory-tasks", "Episodic", "KnowMeBench"), None, "test"),
+    "REALTALK": (os.path.join(BASE_RAW_DATA_DIR, "memory-tasks", "Dialogue", "REALTALK"), None, "test"),
+    "PeerQA": (os.path.join(BASE_RAW_DATA_DIR, "memory-tasks", "Semantic", "PeerQA"), None, "test"),
+    "DeepPlanning": (os.path.join(BASE_RAW_DATA_DIR, "memory-tasks", "Procedural", "DeepPlanning"), None, "test"),
+
+    # GAE-GUIAct
+    "GAE-GUIAct_q2t": (os.path.join(BASE_RAW_DATA_DIR, "gui-tasks", "GAE-GUIAct"), None, "q2t"),
+    "GAE-GUIAct_q2s": (os.path.join(BASE_RAW_DATA_DIR, "gui-tasks", "GAE-GUIAct"), None, "q2s"),
+    "GAE-GUIAct_s2s": (os.path.join(BASE_RAW_DATA_DIR, "gui-tasks", "GAE-GUIAct"), None, "s2s"),
+    "GAE-GUIAct_t2s": (os.path.join(BASE_RAW_DATA_DIR, "gui-tasks", "GAE-GUIAct"), None, "t2s"),
+    # GAE-Mind2Web
+    "GAE-Mind2Web_q2t": (os.path.join(BASE_RAW_DATA_DIR, "gui-tasks", "GAE-Mind2Web"), None, "q2t"),
+    "GAE-Mind2Web_q2s": (os.path.join(BASE_RAW_DATA_DIR, "gui-tasks", "GAE-Mind2Web"), None, "q2s"),
+    "GAE-Mind2Web_s2s": (os.path.join(BASE_RAW_DATA_DIR, "gui-tasks", "GAE-Mind2Web"), None, "s2s"),
+    "GAE-Mind2Web_t2s": (os.path.join(BASE_RAW_DATA_DIR, "gui-tasks", "GAE-Mind2Web"), None, "t2s"),
+
+
 }

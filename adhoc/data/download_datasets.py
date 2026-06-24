@@ -35,7 +35,7 @@ VISDOC_DATASETS = {
     "MMLongBench-doc": ("VLM2Vec/MMLongBench-doc", None, "test"),
     # "MMLongBench-page": ("VLM2Vec/MMLongBench", None, "test"),
     '''
-    
+
     "ViDoSeek-page": ("VLM2Vec/ViDoSeek-page-fixed", None, "test"),
     "MMLongBench-page": ("VLM2Vec/MMLongBench-page-fixed", None, "test"),
 }
@@ -170,7 +170,7 @@ def clone_hf_dataset(repo_id: str, output_path: str):
         output_path (str): The local path where the repository should be cloned.
     """
     repo_url = f"https://huggingface.co/datasets/{repo_id}"
-    
+
     # Ensure the parent directory exists
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
@@ -181,14 +181,14 @@ def clone_hf_dataset(repo_id: str, output_path: str):
     command = f"git clone {repo_url} {output_path}"
     print_rank(f"  Cloning {repo_id} to {output_path}...")
     print_rank(f"  Executing: {command}")
-    
+
     # Execute the command using run_shell_command
     # The agent will replace this with a tool call.
     # For direct script execution, you might use os.system(command)
     # For the agent, this will be a tool call.
     # Example of how the agent would call it:
     # run_shell_command(command=command, description=f"Cloning {repo_id}")
-    
+
     # Placeholder for agent execution (replace with actual tool call when running as agent)
     # For now, using os.system for script completeness if run directly
     result = os.system(command) # This line will be replaced by the agent with a tool call
@@ -216,14 +216,14 @@ def download_datasets_via_git_clone(datasets_map: dict, base_output_dir: str, mo
         modality_name (str): The name of the modality (e.g., "visdoc-tasks", "video-tasks").
     """
     print(f"\n" + "="*20 + f" Cloning {modality_name.replace('-', ' ').title()} Datasets " + "="*20)
-    
+
     for dataset_name, (repo_id, _, _) in datasets_map.items():
         # Construct the full output path for this dataset
         # The repo_id might contain slashes, so we need to make sure the last part is the dataset folder name
         # e.g., "vidore/esg_reports_human_labeled_v2" -> "esg_reports_human_labeled_v2"
         dataset_folder_name = repo_id.split('/')[-1]
         output_path = os.path.join(base_output_dir, dataset_folder_name)
-        
+
         clone_hf_dataset(repo_id, output_path)
 
 

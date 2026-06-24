@@ -91,12 +91,12 @@ def add_metainfo_hook(f):
         batch_data = f(*args, **kwargs)
         # append common metadata
         batch_size = len(batch_data['query_text'])
-        
+
         # DEBUG: Validate column lengths
         for k, v in batch_data.items():
             if len(v) != batch_size:
                 print(f"[add_metainfo_hook] CRITICAL ERROR: Column '{k}' has length {len(v)}, expected {batch_size}")
-        
+
         global_dataset_name = kwargs.get("global_dataset_name", "None")
         batch_data['global_dataset_name'] = [global_dataset_name] * batch_size
         return batch_data

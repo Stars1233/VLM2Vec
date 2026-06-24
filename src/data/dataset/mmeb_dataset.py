@@ -51,7 +51,7 @@ def data_prepare_v4(batch_dict, *args, **kwargs):
 
     batch_size = len(batch_dict['qry'])
     query_texts, query_images, pos_texts, pos_images, neg_texts, neg_images = [], [], [], [], [], []
-    
+
     # Helper for resolution
     def get_res(res_name):
         r = RESOLUTION_MAPPING.get(res_name, [224, 224])
@@ -61,19 +61,19 @@ def data_prepare_v4(batch_dict, *args, **kwargs):
         zip(batch_dict['qry'], batch_dict['qry_image_path'],
             batch_dict['pos_text'], batch_dict['pos_image_path'],
             batch_dict.get('neg_text', [''] * batch_size), batch_dict.get('neg_image_path', [None] * batch_size)):
-        
+
         if (not qry_text and not qry_image_path) or (not pos_text and not pos_image_path):
             # print("empty inputs")
             continue
-            
+
         if model_backbone != PHI3V:
             qry_text = qry_text.replace(VLM_IMAGE_TOKENS[PHI3V], VLM_IMAGE_TOKENS[model_backbone])
             pos_text = pos_text.replace(VLM_IMAGE_TOKENS[PHI3V], VLM_IMAGE_TOKENS[model_backbone])
             neg_text = neg_text.replace(VLM_IMAGE_TOKENS[PHI3V], VLM_IMAGE_TOKENS[model_backbone]) if neg_text else ''
-            
+
         query_texts.append(qry_text)
         pos_texts.append(pos_text)
-        
+
         # Negative Text: List[String]
         if neg_text:
             neg_texts.append([neg_text])
@@ -87,10 +87,10 @@ def data_prepare_v4(batch_dict, *args, **kwargs):
 
         qry_image = {"bytes": [None], "paths": [os.path.join(image_dir, qry_image_path) if qry_image_path else None], "resolutions": [qry_res]}
         pos_image = {"bytes": [None], "paths": [os.path.join(image_dir, pos_image_path) if pos_image_path else None], "resolutions": [pos_res]}
-        
+
         query_images.append(qry_image)
         pos_images.append(pos_image)
-        
+
         # Negative Image: List[Struct]
         if neg_image_path:
             neg_image_struct = {"bytes": [None], "paths": [os.path.join(image_dir, neg_image_path)], "resolutions": [neg_res]}
@@ -133,10 +133,10 @@ def load_mmeb_dataset(model_args, data_args, training_args, *args, **kwargs):
     kwargs['model_backbone'] = model_args.model_backbone
     kwargs['image_resolution'] = data_args.image_resolution
     kwargs['global_dataset_name'] = f'{DATASET_PARSER_NAME}/{subset_name}'
-    
+
     # Remove all original columns to prevent length mismatch if filtering occurs
     remove_columns = dataset.column_names
-    
+
     dataset = dataset.map(lambda x:
                           data_prepare_v4(x, **kwargs), batched=True, batch_size=2048,
                           remove_columns=remove_columns, drop_last_batch=False, features=MULTIMODAL_FEATURES)

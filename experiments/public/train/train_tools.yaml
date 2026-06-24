@@ -1,0 +1,4 @@
+ToolDe_train:
+    dataset_parser: toolDe
+    data_path: ${MMEB_V3_TRAIN_DIR}/tool-tasks-train
+    weight: 1
