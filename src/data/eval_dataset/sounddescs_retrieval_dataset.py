@@ -89,7 +89,14 @@ def _load_parquet_stream(pattern: str, columns: Optional[List[str]] = None):
         "streaming": True,
     }
     if columns is not None:
-        kw["columns"] = columns
+        # Only request columns that actually exist (streaming load raises a *lazy*
+        # ArrowInvalid during iteration otherwise, e.g. requesting "path" when the
+        # schema only has "audio_path"). Filter up front against the real schema.
+        import pyarrow.parquet as pq
+        present = set(pq.read_schema(files[0]).names)
+        columns = [c for c in columns if c in present]
+        if columns:
+            kw["columns"] = columns
 
     try:
         return datasets.load_dataset(**kw)["data"]

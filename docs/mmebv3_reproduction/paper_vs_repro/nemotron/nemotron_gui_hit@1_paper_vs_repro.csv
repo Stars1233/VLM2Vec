@@ -1,0 +1,10 @@
+dataset,Qwen3-VL-Embedding-2B (paper),Qwen3-VL-Embedding-8B (paper),VLM2Vec-Qwen2VL-7B (paper),VLM2Vec-V2.0-2B (paper),GME-7B (paper),WAVE-7B (paper),Omni-Embed-Nemotron-3B (paper),"Omni-Embed-Nemotron-3B (reproduced,hit@1)",diff,eval_time_s
+GAE-guiact-q2s,19.8,29.5,7.7,25.9,31.3,5.5,26.2,26.3,0.1,464
+GAE-guiact-q2t,48.4,46.3,42.6,52.6,31.3,7.4,39.4,39.6,0.2,459
+GAE-guiact-s2s,25.5,30.2,33.2,35.8,32.7,17.2,39.2,39.7,0.5,519
+GAE-guiact-t2s,25.0,24.9,8.6,24.1,17.1,5.9,19.2,19.6,0.4,680
+GAE-mind2web-q2s,27.1,37.7,12.2,43.0,42.1,10.9,40.8,41.1,0.3,124
+GAE-mind2web-q2t,44.3,37.2,32.4,47.8,32.4,11.9,34.4,34.0,-0.4,273
+GAE-mind2web-s2s,30.2,35.2,32.4,37.1,37.1,28.0,37.7,38.0,0.3,128
+GAE-mind2web-t2s,23.1,27.4,1.9,23.4,15.9,7.8,23.1,23.4,0.3,173
+AVG (8),,,,,,,32.5,32.7,0.2,

@@ -1,0 +1,13 @@
+"# Nemotron audio reproduced on the merged PR#205 code (torch-2.11 env-fixes + audio_max_seconds=30, nproc=1)."
+dataset,paper hit@1,reproduced hit@1,authors repro_new,diff (repro - repro_new)
+NSynth,28.2,22.5,22.7,-0.2
+UrbanSound8K,43.9,54.1,54.1,0.0
+ESC-50,75.7,76.7,76.5,0.2
+SpeechCommands,45.0,87.0,87.0,0.0
+CREMA-D,27.2,27.3,26.9,0.4
+Clotho,11.5,15.4,12.3,3.1
+SoundDescs,14.5,24.8,17.0,7.8
+AVE,12.7,14.2,14.2,0.0
+SpeechCOCO,26.4,31.9,32.3,-0.4
+TUTSound,42.1,49.0,53.7,-4.7
+TUTSound(hard),4.3,4.1,4.4,-0.3

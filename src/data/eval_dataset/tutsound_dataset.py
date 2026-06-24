@@ -8,6 +8,8 @@ from typing import Dict, List, Tuple, Any
 
 import datasets
 import torchaudio
+import soundfile as sf
+import types
 from src.data.eval_dataset.audio_instruction_utils import build_query_text
 from src.data.eval_dataset.base_eval_dataset import AutoEvalPairDataset
 from src.constant.dataset_hf_path import EVAL_DATASET_HF_PATH
@@ -118,7 +120,8 @@ def build_tutsound_audio_dataset(path_info: Tuple[str, str, str], **kwargs):
         gt_events = info["events"]
 
         try:
-            audio_info = torchaudio.info(abs_path)
+            _si = sf.info(abs_path)
+            audio_info = types.SimpleNamespace(num_frames=_si.frames, sample_rate=_si.samplerate)
         except Exception as e:
             raise RuntimeError(f"Failed to read audio info for {abs_path}: {e}") from e
 

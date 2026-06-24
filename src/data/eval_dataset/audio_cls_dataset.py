@@ -53,25 +53,21 @@ def _extract_audio_obj(row: Dict[str, Any]) -> Dict[str, Any]:
         # NOTE: Comment translated to English.
         if audio_bytes is None and "array" in audio:
             import io
-            import torch
-            import torchaudio
+            import soundfile as sf
 
             array = audio["array"]
-            sampling_rate = audio.get("sampling_rate", 16000)
+            sampling_rate = int(audio.get("sampling_rate", 16000))
 
-            # NOTE: Comment translated to English.
             if isinstance(array, list):
                 array = np.array(array)
+            array = np.asarray(array, dtype=np.float32)
+            if array.ndim > 1:
+                array = array.squeeze()
 
-            # NOTE: Comment translated to English.
-            if array.ndim == 1:
-                waveform = torch.from_numpy(array).unsqueeze(0).float()
-            else:
-                waveform = torch.from_numpy(array).float()
-
-            # NOTE: Comment translated to English.
+            # torch 2.11 torchaudio.save routes through torchcodec and cannot encode to an
+            # in-memory BytesIO; use soundfile to materialise WAV bytes from the decoded array.
             buffer = io.BytesIO()
-            torchaudio.save(buffer, waveform, sampling_rate, format='wav')
+            sf.write(buffer, array, sampling_rate, format="WAV", subtype="PCM_16")
             audio_bytes = buffer.getvalue()
 
     else:
@@ -467,6 +463,13 @@ def build_audio_cls_dataset(dataset_name: str, path_info: Tuple[str, str, str], 
 
     # NOTE: Comment translated to English.
     kwargs["dataset_name"] = dataset_name
+
+    # If the audio column was auto-cast to a datasets.Audio feature (e.g. CREMA-D's
+    # struct<bytes,path>), accessing it would trigger a torchcodec decode that is broken
+    # in this env. Cast to decode=False so _extract_audio_obj gets raw {bytes,path} and
+    # the collator decodes via soundfile.
+    if "audio" in dataset.column_names and isinstance(dataset.features.get("audio"), datasets.Audio):
+        dataset = dataset.cast_column("audio", datasets.Audio(decode=False))
 
     dataset = sample_dataset(dataset, **kwargs)
 
