@@ -1,143 +1,250 @@
-#!/usr/bin/env python3
 """
-Generate leaderboard JSON from eval results directory.
-
-Usage:
-    python generate_leaderboard.py <eval_dir> [--model_name NAME] [--output OUTPUT_PATH]
-
-Examples:
-    python generate_leaderboard.py /eval_dir/e5-omni-7B
-    python generate_leaderboard.py /eval_dir/e5-omni-7B --model_name "E5-Omni-7B" --output ./e5-omni-7B.json
-
-The script scans <eval_dir>/<modality>/*_score.json and assembles them into
-a single JSON file compatible with the MMEB leaderboard format.
-
-Primary metric per modality:
-    visdoc, text  -> ndcg_linear@5
-    all others    -> hit@1
+report_score_v3.py: The official script to generate the final scores report (in JSON) for MMEB-V3 leaderboard submission. 
+You should only modify the Configuration section below to add your model's metadata. No other changes are needed.
+An example configuration is provided for your reference. 
 """
 
-import argparse
-import json
-import glob
 import os
+import json
 from datetime import datetime
 
+# ==============================================================================
+# Configuration
+# ==============================================================================
 
-# Dataset name fixes: eval output name -> leaderboard canonical name
-NAME_FIXES = {
-    "MMLongBench-page": "MMLongBench-page-fixed",
-    "ViDoSeek-page": "ViDoSeek-page-fixed",
+# ==> Unified list of experiments to process.
+# Fill in the metadata for each experiment. `None` will become `null` in the JSON.
+
+EXAMPLES = [
+    {
+        "path": "vlm2vec_exps/VLM2Vec-Qwen2VL-V2.0-2B/",
+        "metadata": {
+            "model_name": "VLM2Vec-Qwen2VL-V2.0-2B",
+            "model_size": "2", # in B, digits only here. 2 for 2B, 0.4 for 400M, etc.
+            "embedding_dimension": None, # Please fill in
+            "max_length_tokens": None,   # Please fill in
+            "model_release_date": "2025-04-01", # Please adjust this date
+            "score_source": "",           # e.g., "Self-Reported" or "TIGER-Lab"
+            "url": ""                    # e.g., Paper, GitHub, or Hugging Face link
+        }
+    },
+    {
+        "path": "vlm2vec_exps/VLM2Vec-Qwen2VL-V2.1-2B/",
+        "metadata": {
+            "model_name": "VLM2Vec-Qwen2VL-V2.1-2B",
+            "model_size": "2", # in B, digits only here. 2 for 2B, 0.4 for 400M, etc.
+            "embedding_dimension": None, # Please fill in
+            "max_length_tokens": None,   # Please fill in
+            "model_release_date": "2025-05-15", # Please adjust this date
+            "score_source": "",           # e.g., "Self-Reported" or "TIGER-Lab"
+            "url": ""                    # e.g., Paper, GitHub, or Hugging Face link
+        }
+    },
+]
+
+
+# ==============================================================================
+# TODO: Your models' metadata goes here. Please fill in the required fields.
+# ==============================================================================
+
+EXPERIMENTS = [
+    {
+        "path": ...,
+        "metadata": {
+            "model_name": ..., # * Mandatory Field
+            "model_backbone": ...,
+            "model_size": ...,
+            "embedding_dimension": ...,
+            "max_length_tokens": ...,
+            "model_release_date": ...,
+            "data_source": "Self-Reported",
+            "url": ..., 
+            "contact": ...,
+        }
+    },
+    ...
+]
+
+
+# ==============================================================================
+# Main Processing Logic (No changes needed below this line)
+# ==============================================================================
+
+
+# Define the datasets grouped by modality
+modality2dataset = {
+    "audio": [
+        'SpeechCommands', 'UrbanSound8K', 'ESC-50', 'NSynth', 'CREMA-D', 'Clotho', 'SoundDescs', 'TUTSound', 'TUTSound(hard)', 'AVE', 'SpeechCOCO'
+        ], 
+    "image": [
+        "ImageNet-1K", "N24News", "HatefulMemes", "VOC2007", "SUN397", "Place365", "ImageNet-A", "ImageNet-R", "ObjectNet", "Country211",
+        "OK-VQA", "A-OKVQA", "DocVQA", "InfographicsVQA", "ChartQA", "Visual7W", "ScienceQA", "VizWiz", "GQA", "TextVQA",
+        "VisDial", "CIRR", "VisualNews_t2i", "VisualNews_i2t", "MSCOCO_t2i", "MSCOCO_i2t", "NIGHTS", "WebQA", "FashionIQ", "Wiki-SS-NQ", "OVEN", "EDIS",
+        "MSCOCO", "RefCOCO", "RefCOCO-Matching", "Visual7W-Pointing"
+        ],
+    "video": [
+        "K700", "SmthSmthV2", "HMDB51", "UCF101", "Breakfast",
+        "MVBench", "Video-MME", "NExTQA", "EgoSchema", "ActivityNetQA",
+        "DiDeMo", "MSR-VTT", "MSVD", "VATEX", "YouCook2",
+        "QVHighlight", "Charades-STA", "MomentSeeker",
+    ],
+    "visdoc": [
+        "ViDoRe_arxivqa", "ViDoRe_docvqa", "ViDoRe_infovqa", "ViDoRe_tabfquad", "ViDoRe_tatdqa", "ViDoRe_shiftproject",
+        "ViDoRe_syntheticDocQA_artificial_intelligence", "ViDoRe_syntheticDocQA_energy", "ViDoRe_syntheticDocQA_government_reports", "ViDoRe_syntheticDocQA_healthcare_industry",
+        "ViDoRe_esg_reports_human_labeled_v2", "ViDoRe_biomedical_lectures_v2_multilingual", "ViDoRe_economics_reports_v2_multilingual", "ViDoRe_esg_reports_v2_multilingual",
+        "VisRAG_ArxivQA", "VisRAG_ChartQA", "VisRAG_MP-DocVQA", "VisRAG_SlideVQA", "VisRAG_InfoVQA", "VisRAG_PlotQA",
+        "ViDoSeek-page", "ViDoSeek-doc", "MMLongBench-page", "MMLongBench-doc"
+    ], 
+    "text": [
+        'core17-instructions', 'news21-instructions', 'robust04-instructions', 'Bioinformatics', 'Biology', 'IIYi-Clinical', 'MedQA-Diag', 'MedXpertQA-Exam', 'Medical-Sciences', 'PMC-Clinical', 'PMC-Treatment', 'Audience-v1', 'Clarity-v1', 'Format-v1', 'Language-v1', 'Length-v1', 'Source-v1', 'aops', 'biology', 'earth_science', 'economics', 'leetcode', 'pony', 'psychology', 'robotics', 'stackoverflow', 'sustainable_living', 'theoremqa_questions', 'theoremqa_theorems', '2wikimqa', 'narrativeqa', 'needle', 'passkey', 'qmsum', 'summ_screen_fd', 'Books', 'Legal Document', 'Medical Case', 'Movies', 'People', 'NanoArguAna', 'NanoClimateFEVER', 'NanoDBPedia', 'NanoFEVER', 'NanoFiQA2018', 'NanoHotpotQA', 'NanoMSMARCO', 'NanoNFCorpus', 'NanoNQ', 'NanoQuoraRetrieval', 'NanoSCIDOCS', 'NanoSciFact', 'NanoTouche2020'
+        ], 
+    "tool": [
+        'apibank', 'apigen', 'mnms', 'reversechain', 'rotbench', 't-eval-dialog', 't-eval-step', 'taskbench-daily', 'toolace', 'toolbench', 'toolemu', 'tooleyes', 'toollens', 'ultratool', 'autotools-food', 'autotools-music', 'autotools-weather', 'restgpt-spotify', 'restgpt-tmdb', 'craft-math-algebra', 'craft-tabmwp', 'craft-vqa', 'gorilla-huggingface', 'gorilla-pytorch', 'gorilla-tensor', 'toolink', 'appbench', 'gpt4tools', 'gta', 'taskbench-huggingface', 'taskbench-multimedia', 'metatool', 'tool-be-honest', 'toolalpaca', 'toolbench-sam'
+        ], 
+    "gui": [
+        'GAE-GUIAct_q2t', 'GAE-GUIAct_q2s', 'GAE-GUIAct_s2s', 'GAE-GUIAct_t2s', 'GAE-Mind2Web_q2t', 'GAE-Mind2Web_q2s', 'GAE-Mind2Web_s2s', 'GAE-Mind2Web_t2s'
+        ], 
+    "memory": [
+        'REALTALK', 'KnowMeBench', 'PeerQA', 'DeepPlanning'
+        ]
 }
-
-# Primary metric per modality
-MODALITY_METRIC = {
+modality2metric = {
+    "image": "hit@1",
+    "video": "hit@1",
     "visdoc": "ndcg_linear@5",
-    "text":   "ndcg_linear@5",
+    "audio": "hit@1", 
+    "text": "hit@1",
+    "tool": "hit@1",
+    "gui": "hit@1",
+    "memory": "hit@1"
 }
-DEFAULT_METRIC = "hit@1"
+modalities = ["image", "video", "visdoc", "audio", "text", "tool", "gui", "memory"] # Process in this order
 
+for experiment in EXPERIMENTS:
+    base_path = experiment['path']
+    experiment_metadata = experiment['metadata']
+    experiment_name_for_log = os.path.basename(base_path.strip('/'))
 
-def collect_scores(eval_dir):
-    """Scan eval_dir/<modality>/*_score.json and return nested dict."""
-    metrics = {}
+    current_experiment_scores = {}
 
-    for mod_dir in sorted(os.listdir(eval_dir)):
-        mod_path = os.path.join(eval_dir, mod_dir)
-        if not os.path.isdir(mod_path) or mod_dir.startswith("_") or mod_dir == "run.log":
+    print(f"\nProcessing experiment: {experiment_name_for_log}")
+    print(f"Path: {base_path}")
+
+    for modality in modalities:
+        current_experiment_scores[modality] = {}
+        modality_specific_result_dir = os.path.join(base_path, modality)
+
+        for dataset_name in modality2dataset.get(modality, []):
+            current_experiment_scores[modality][dataset_name] = "FILE_N/A" # Initialize
+
+        if not os.path.isdir(modality_specific_result_dir):
+            print(f"    Directory not found: {modality_specific_result_dir}")
+            for dataset_name in modality2dataset.get(modality, []):
+                current_experiment_scores[modality][dataset_name] = "DIR_N/A"
             continue
 
-        datasets = {}
-        for f in sorted(glob.glob(os.path.join(mod_path, "**", "*_score.json"), recursive=True)):
-            ds_name = os.path.basename(f).replace("_score.json", "")
-            ds_name = NAME_FIXES.get(ds_name, ds_name)
+        for filename in os.listdir(modality_specific_result_dir):
+            if filename.endswith("_score.json"):
+                score_file_path = os.path.join(modality_specific_result_dir, filename)
+                dataset_name_from_file = None
+                for known_dataset in modality2dataset.get(modality, []):
+                    if filename == f"{known_dataset}_score.json":
+                        dataset_name_from_file = known_dataset
+                        break
 
-            if ds_name in datasets:
-                continue
+                if dataset_name_from_file:
+                    try:
+                        with open(score_file_path, "r") as f:
+                            score_data = json.load(f)
+                            current_experiment_scores[modality][dataset_name_from_file] = score_data
+                    except json.JSONDecodeError:
+                        print(f"      Error decoding JSON from {score_file_path}")
+                        current_experiment_scores[modality][dataset_name_from_file] = "JSON_ERROR"
+                    except Exception as e:
+                        print(f"      Error reading file {score_file_path}: {e}")
+                        current_experiment_scores[modality][dataset_name_from_file] = "READ_ERROR"
 
-            with open(f) as fh:
-                datasets[ds_name] = json.load(fh)
+    # --- Construct and Save the Final JSON Report ---
+    final_metadata = experiment_metadata.copy()
+    final_metadata['report_generated_date'] = datetime.now().isoformat()
+    # --- Special handling ---
+    # Special handling for VisDoc datasets with "-fixed" suffix
+    current_experiment_scores['visdoc'] = {(f'{k}-fixed' if k in ['MMLongBench-page', 'ViDoSeek-page'] else k): v 
+                                           for k, v in current_experiment_scores['visdoc'].items()} # temp fix
+    # merge "tool", "gui", and "memory" into "agent"
+    # current_experiment_scores['agent'] = current_experiment_scores.pop('tool', {}) | current_experiment_scores.pop('gui', {}) | current_experiment_scores.pop('memory', {})
+    # -------------------------
 
-        if datasets:
-            metrics[mod_dir] = datasets
-
-    return metrics
-
-
-def print_summary(metrics):
-    """Print per-modality averages using the correct primary metric."""
-    print("\n  Per-modality averages:")
-    for mod in sorted(metrics):
-        metric_key = MODALITY_METRIC.get(mod, DEFAULT_METRIC)
-        vals = []
-        missing = []
-        for ds, scores in metrics[mod].items():
-            v = scores.get(metric_key)
-            if isinstance(v, (int, float)):
-                vals.append(v)
-            else:
-                missing.append(ds)
-        if vals:
-            avg = sum(vals) / len(vals)
-            print(f"    {mod:<10} ({metric_key:<15}): {avg*100:.1f}  ({len(vals)} datasets)")
-        else:
-            print(f"    {mod:<10}: no valid scores")
-        if missing:
-            print(f"      missing metric: {missing}")
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Generate leaderboard JSON from eval results")
-    parser.add_argument("eval_dir", help="Path to eval results directory (e.g. eval_standard/e5-omni-7B)")
-    parser.add_argument("--model_name", default=None, help="Model name for metadata (default: dirname)")
-    parser.add_argument("--model_size", type=float, default=0, help="Model size in billions (e.g. 3.1)")
-    parser.add_argument("--embedding_dim", type=int, default=0, help="Embedding dimension (e.g. 2048)")
-    parser.add_argument("--url", default="", help="Model URL (e.g. HuggingFace link)")
-    parser.add_argument("--output", default=None, help="Output JSON path (default: <leaderboard_dir>/<model_name>.json)")
-    args = parser.parse_args()
-
-    eval_dir = args.eval_dir.rstrip("/")
-    model_name = args.model_name or os.path.basename(eval_dir)
-    output_dir = os.path.dirname(os.path.abspath(__file__))
-    output_path = args.output or os.path.join(output_dir, f"{model_name}.json")
-
-    if not os.path.isdir(eval_dir):
-        print(f"Error: {eval_dir} is not a directory")
-        return 1
-
-    print(f"Scanning: {eval_dir}")
-    metrics = collect_scores(eval_dir)
-
-    if not metrics:
-        print("Error: no score files found")
-        return 1
-
-    result = {
-        "metadata": {
-            "model_name": model_name,
-            "model_size": args.model_size,
-            "embedding_dimension": args.embedding_dim,
-            "url": args.url,
-            "data_source": "Reproduced",
-            "report_generated_date": datetime.now().isoformat(),
-        },
-        "metrics": metrics,
+    final_output = {
+        "metadata": final_metadata,
+        "metrics": current_experiment_scores
     }
 
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with open(output_path, "w") as f:
-        json.dump(result, f, indent=4)
-
-    total = sum(len(ds) for ds in metrics.values())
-    print(f"\nOutput: {output_path}")
-    print(f"Total: {total} datasets across {len(metrics)} modalities")
-    for mod in sorted(metrics):
-        print(f"  {mod}: {len(metrics[mod])}")
-
-    print_summary(metrics)
-
-    return 0
+    output_json_path = os.path.join(base_path, f"{final_metadata['model_name']}.json")
+    try:
+        with open(output_json_path, "w") as f:
+            json.dump(final_output, f, indent=4)
+        print(f"  Report for '{experiment_name_for_log}' saved to: {output_json_path}")
+    except Exception as e:
+        print(f"  Error saving JSON report for '{experiment_name_for_log}' to {output_json_path}: {e}")
 
 
-if __name__ == "__main__":
-    exit(main())
+    # --- Print detailed main scores per dataset for easy copy to spreadsheet ---
+    print(f"\n  --- Detailed Main Scores for Spreadsheet (Experiment: {experiment_name_for_log}) ---")
+    for modality in modalities:
+        main_metric_key = modality2metric[modality]
+        for dataset_name in modality2dataset.get(modality, []):
+            score_to_print_val = "NOT_FOUND_IN_RESULTS"
+            modality_data = current_experiment_scores.get(modality, {})
+            score_info = modality_data.get(dataset_name)
+
+            if isinstance(score_info, dict):
+                metric_value = score_info.get(main_metric_key)
+                if isinstance(metric_value, (int, float)):
+                    score_to_print_val = f"{metric_value:.4f}"
+                else:
+                    score_to_print_val = f"METRIC_KEY_MISSING ({main_metric_key})"
+            elif isinstance(score_info, str):
+                score_to_print_val = score_info
+
+            print(f"{dataset_name}\t{score_to_print_val}")
+        print("")
+
+    # --- Print average scores and missing datasets per modality ---
+    print(f"\n  --- Summary for Experiment: {experiment_name_for_log} ---")
+    for modality in modalities:
+        if modality not in current_experiment_scores:
+            print(f"    Modality '{modality.upper()}' not processed.")
+            continue
+        main_metric_key = modality2metric[modality]
+        modality_data = current_experiment_scores[modality]
+        collected_metric_values = []
+        datasets_missing_score_file = []
+        datasets_file_found_metric_missing = []
+
+        for dataset_name in modality2dataset.get(modality, []):
+            score_info = modality_data.get(dataset_name)
+            if isinstance(score_info, dict):
+                metric_value = score_info.get(main_metric_key)
+                if isinstance(metric_value, (int, float)):
+                    collected_metric_values.append(metric_value)
+                else:
+                    datasets_file_found_metric_missing.append(f"{dataset_name} (metric '{main_metric_key}' missing/invalid)")
+            else:
+                datasets_missing_score_file.append(f"{dataset_name} (status: {score_info if score_info else 'Not Processed'})")
+
+        if collected_metric_values:
+            average_score = sum(collected_metric_values) / len(collected_metric_values)
+            print(f"      Average of {modality.upper()}\t- {main_metric_key}:\t{average_score:.4f} (from {len(collected_metric_values)} datasets)")
+        else:
+            print(f"      Average of {modality.upper()}\t-  {main_metric_key}:\tN/A (no valid scores found)")
+
+        if datasets_missing_score_file:
+            print(f"      Datasets with missing/errored score files:")
+            for ds_status in datasets_missing_score_file: print(f"        - {ds_status}")
+        if datasets_file_found_metric_missing:
+            print(f"      Score files found but main metric ('{main_metric_key}') missing/invalid:")
+            for ds_status in datasets_file_found_metric_missing: print(f"        - {ds_status}")
+
+
+print("\nProcessing complete.")
