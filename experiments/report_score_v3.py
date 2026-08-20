@@ -80,7 +80,7 @@ modality2dataset = {
         "ImageNet-1K", "N24News", "HatefulMemes", "VOC2007", "SUN397", "Place365", "ImageNet-A", "ImageNet-R", "ObjectNet", "Country211",
         "OK-VQA", "A-OKVQA", "DocVQA", "InfographicsVQA", "ChartQA", "Visual7W", "ScienceQA", "VizWiz", "GQA", "TextVQA",
         "VisDial", "CIRR", "VisualNews_t2i", "VisualNews_i2t", "MSCOCO_t2i", "MSCOCO_i2t", "NIGHTS", "WebQA", "FashionIQ", "Wiki-SS-NQ", "OVEN", "EDIS",
-        "MSCOCO", "RefCOCO", "RefCOCO-Matching", "Visual7W-Pointing"
+        "MSCOCO", "RefCOCO", "RefCOCO-Matching", "Visual7W-Pointing", "MCMR"
         ],
     "video": [
         "K700", "SmthSmthV2", "HMDB51", "UCF101", "Breakfast",
